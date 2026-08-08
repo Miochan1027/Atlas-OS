@@ -26,30 +26,22 @@ type Page =
 
 function App() {
   // =====================
-  // 系統頁面
+  // 頁面
   // =====================
 
   const [currentPage, setCurrentPage] =
     useState<Page>("dashboard");
 
   // =====================
-  // 登入狀態
+  // 登入
   // =====================
 
-  const [email, setEmail] =
-    useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
 
-  const [password, setPassword] =
-    useState("");
-
-  const [loggedIn, setLoggedIn] =
-    useState(false);
-
-  const [loading, setLoading] =
-    useState(true);
-
-  const [message, setMessage] =
-    useState("");
+  const [loggedIn, setLoggedIn] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
 
   // =====================
   // 初始化 Session
@@ -58,7 +50,7 @@ function App() {
   useEffect(() => {
     let mounted = true;
 
-    const checkSession = async () => {
+    const initSession = async () => {
       const {
         data: { session },
       } = await supabase.auth.getSession();
@@ -69,7 +61,7 @@ function App() {
       setLoading(false);
     };
 
-    checkSession();
+    initSession();
 
     const {
       data: { subscription },
@@ -93,11 +85,11 @@ function App() {
 
   useEffect(() => {
     const handler = (event: Event) => {
-      const custom =
+      const customEvent =
         event as CustomEvent<Page>;
 
-      if (custom.detail) {
-        setCurrentPage(custom.detail);
+      if (customEvent.detail) {
+        setCurrentPage(customEvent.detail);
       }
     };
 
@@ -115,11 +107,11 @@ function App() {
   }, []);
 
   // =====================
-  // 登入
+  // Email + 密碼登入
   // =====================
 
   const handleLogin = async (
-    e: FormEvent
+    e: FormEvent<HTMLFormElement>
   ) => {
     e.preventDefault();
 
@@ -129,24 +121,21 @@ function App() {
     const {
       error,
     } = await supabase.auth.signInWithPassword({
-      email,
+      email: email.trim(),
       password,
     });
 
     if (error) {
-      setMessage(
-        "帳號或密碼錯誤"
-      );
-
+      setMessage("帳號或密碼錯誤");
       setLoading(false);
       return;
     }
 
-    // Supabase 登入成功
-    // 不再進入任何自製 OTP 畫面
+    // 登入成功
     setLoggedIn(true);
     setCurrentPage("dashboard");
 
+    setPassword("");
     setLoading(false);
   };
 
@@ -155,6 +144,8 @@ function App() {
   // =====================
 
   const handleLogout = async () => {
+    setLoading(true);
+
     await supabase.auth.signOut();
 
     setLoggedIn(false);
@@ -163,13 +154,15 @@ function App() {
     setEmail("");
     setPassword("");
     setMessage("");
+
+    setLoading(false);
   };
 
   // =====================
   // 初始化載入
   // =====================
 
-  if (loading) {
+  if (loading && !loggedIn) {
     return (
       <div className="atlas-login-page">
         <div className="atlas-login-card">
@@ -180,8 +173,18 @@ function App() {
           <h1>Atlas OS</h1>
 
           <p>
-            正在確認登入狀態...
+            個人管理作業系統
           </p>
+
+          <div
+            style={{
+              textAlign: "center",
+              marginTop: "24px",
+              color: "#927d6d",
+            }}
+          >
+            載入中...
+          </div>
         </div>
       </div>
     );
@@ -221,11 +224,11 @@ function App() {
               type="email"
               value={email}
               placeholder="輸入 Email"
+              autoComplete="email"
               onChange={(e) =>
                 setEmail(e.target.value)
               }
               required
-              autoComplete="email"
             />
 
             <label>
@@ -237,11 +240,11 @@ function App() {
               type="password"
               value={password}
               placeholder="輸入密碼"
+              autoComplete="current-password"
               onChange={(e) =>
                 setPassword(e.target.value)
               }
               required
-              autoComplete="current-password"
             />
 
             <button
@@ -268,45 +271,80 @@ function App() {
   }
 
   // =====================
-  // Atlas OS 主系統
+  // 主系統
   // =====================
 
   return (
-    <>
+    <div
+      style={{
+        minHeight: "100vh",
+        width: "100%",
+        position: "relative",
+      }}
+    >
+
+      {/* Sidebar */}
       <Sidebar
         currentPage={currentPage}
         onNavigate={setCurrentPage}
         onLogout={handleLogout}
       />
 
-      <div className="atlas-main-inner">
+      {/* =====================
+          主內容區
+          直接在 App.tsx 保證
+          不會跑到 Sidebar 底下
+         ===================== */}
 
-        {currentPage === "dashboard" && (
-          <Dashboard />
-        )}
+      <main
+        style={{
+          marginLeft: "283px",
+          width: "calc(100% - 283px)",
+          minHeight: "100vh",
+          boxSizing: "border-box",
+          position: "relative",
+          overflowX: "hidden",
+        }}
+      >
 
-        {currentPage === "study" && (
-          <StudyCenter />
-        )}
+        <div
+          className="atlas-main-inner"
+          style={{
+            width: "100%",
+            maxWidth: "none",
+            boxSizing: "border-box",
+          }}
+        >
 
-        {currentPage === "care" && (
-          <CareCenter />
-        )}
+          {currentPage === "dashboard" && (
+            <Dashboard />
+          )}
 
-        {currentPage === "stock" && (
-          <StockCenter />
-        )}
+          {currentPage === "study" && (
+            <StudyCenter />
+          )}
 
-        {currentPage === "schedule" && (
-          <ScheduleCenter />
-        )}
+          {currentPage === "care" && (
+            <CareCenter />
+          )}
 
-        {currentPage === "settings" && (
-          <SettingsCenter />
-        )}
+          {currentPage === "stock" && (
+            <StockCenter />
+          )}
 
-      </div>
-    </>
+          {currentPage === "schedule" && (
+            <ScheduleCenter />
+          )}
+
+          {currentPage === "settings" && (
+            <SettingsCenter />
+          )}
+
+        </div>
+
+      </main>
+
+    </div>
   );
 }
 
