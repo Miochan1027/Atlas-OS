@@ -25,27 +25,40 @@ type Page =
   | "settings";
 
 function App() {
-  // =========================
+  // =====================
   // 頁面
-  // =========================
+  // =====================
 
   const [currentPage, setCurrentPage] =
     useState<Page>("dashboard");
 
-  // =========================
+  // =====================
   // 登入
-  // =========================
+  // =====================
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
-  const [loggedIn, setLoggedIn] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState("");
+  const [otp, setOtp] = useState("");
 
-  // =========================
+  const [loggedIn, setLoggedIn] = useState(false);
+  const [needOtp, setNeedOtp] = useState(false);
+
+  const [loading, setLoading] = useState(true);
+  const [otpLoading, setOtpLoading] = useState(false);
+
+  const [message, setMessage] = useState("");
+  const [otpMessage, setOtpMessage] = useState("");
+
+  // =====================
+  // OTP 驗證狀態
+  // =====================
+
+  const OTP_SESSION_KEY = "atlas_otp_verified";
+
+  // =====================
   // 初始化 Session
-  // =========================
+  // =====================
 
   useEffect(() => {
     let mounted = true;
@@ -57,7 +70,24 @@ function App() {
 
       if (!mounted) return;
 
-      setLoggedIn(!!session);
+      const otpVerified =
+        sessionStorage.getItem(OTP_SESSION_KEY) === "1";
+
+      if (session && otpVerified) {
+        // 已登入 + 本次瀏覽階段已完成 OTP
+        setLoggedIn(true);
+        setNeedOtp(false);
+      } else if (session && !otpVerified) {
+        // 有 Supabase Session，
+        // 但尚未完成 OTP
+        setLoggedIn(false);
+        setNeedOtp(true);
+      } else {
+        // 完全沒有登入
+        setLoggedIn(false);
+        setNeedOtp(false);
+      }
+
       setLoading(false);
     };
 
@@ -69,7 +99,19 @@ function App() {
       (_event, session) => {
         if (!mounted) return;
 
-        setLoggedIn(!!session);
+        const otpVerified =
+          sessionStorage.getItem(OTP_SESSION_KEY) === "1";
+
+        if (session && otpVerified) {
+          setLoggedIn(true);
+          setNeedOtp(false);
+        } else if (session && !otpVerified) {
+          setLoggedIn(false);
+          setNeedOtp(true);
+        } else {
+          setLoggedIn(false);
+          setNeedOtp(false);
+        }
       }
     );
 
@@ -79,9 +121,9 @@ function App() {
     };
   }, []);
 
-  // =========================
+  // =====================
   // Sidebar 導覽
-  // =========================
+  // =====================
 
   useEffect(() => {
     const handler = (event: Event) => {
@@ -106,9 +148,9 @@ function App() {
     };
   }, []);
 
-  // =========================
+  // =====================
   // Email + 密碼登入
-  // =========================
+  // =====================
 
   const handleLogin = async (
     e: FormEvent
@@ -118,60 +160,180 @@ function App() {
     setLoading(true);
     setMessage("");
 
-    const { error } =
+    // 每次重新登入，
+    // 都必須重新完成 OTP
+    sessionStorage.removeItem(
+      OTP_SESSION_KEY
+    );
+
+    const {
+      data,
+      error,
+    } =
       await supabase.auth.signInWithPassword({
         email: email.trim(),
         password,
       });
 
-    if (error) {
+    if (error || !data.session) {
       setMessage("帳號或密碼錯誤");
       setLoading(false);
       return;
     }
 
-    // 登入成功
-    setLoggedIn(true);
-    setCurrentPage("dashboard");
+    // 密碼正確
+    // 不直接進入 Atlas OS
+    // 必須先進 OTP
+    setLoggedIn(false);
+    setNeedOtp(true);
 
-    setPassword("");
-    setMessage("");
+    setOtp("");
+    setOtpMessage("");
+
     setLoading(false);
   };
 
-  // =========================
+  // =====================
+  // OTP 驗證
+  // =====================
+
+  const handleOtpVerify = async (
+    e: FormEvent
+  ) => {
+    e.preventDefault();
+
+    const code = otp.trim();
+
+    // 基本檢查
+    if (!/^\d{6}$/.test(code)) {
+      setOtpMessage(
+        "請輸入 6 位數 OTP 驗證碼"
+      );
+      return;
+    }
+
+    setOtpLoading(true);
+    setOtpMessage("");
+
+    try {
+      // 呼叫 Supabase Edge Function
+      //
+      // 注意：
+      // atlas-otp 要的是 code
+      // 不是 otp
+      const {
+        data,
+        error,
+      } =
+        await supabase.functions.invoke(
+          "atlas-otp",
+          {
+            body: {
+              action: "verify",
+              code,
+            },
+          }
+        );
+
+      if (error) {
+        console.error(
+          "atlas-otp error:",
+          error
+        );
+
+        setOtpMessage(
+          "OTP 驗證失敗，請稍後再試"
+        );
+
+        setOtpLoading(false);
+        return;
+      }
+
+      // Edge Function 回傳：
+      // { success: true, verified: true }
+      if (
+        !data ||
+        data.success !== true ||
+        data.verified !== true
+      ) {
+        setOtpMessage(
+          data?.message ||
+            "OTP 驗證碼錯誤"
+        );
+
+        setOtpLoading(false);
+        return;
+      }
+
+      // =====================
+      // OTP 成功
+      // =====================
+
+      sessionStorage.setItem(
+        OTP_SESSION_KEY,
+        "1"
+      );
+
+      setOtp("");
+      setOtpMessage("");
+
+      setNeedOtp(false);
+      setLoggedIn(true);
+      setCurrentPage("dashboard");
+
+      setOtpLoading(false);
+    } catch (error) {
+      console.error(
+        "OTP verification exception:",
+        error
+      );
+
+      setOtpMessage(
+        "OTP 驗證發生錯誤，請稍後再試"
+      );
+
+      setOtpLoading(false);
+    }
+  };
+
+  // =====================
   // 登出
-  // =========================
+  // =====================
 
   const handleLogout = async () => {
     setLoading(true);
 
     await supabase.auth.signOut();
 
+    // 登出後清除 OTP 驗證狀態
+    sessionStorage.removeItem(
+      OTP_SESSION_KEY
+    );
+
     setLoggedIn(false);
+    setNeedOtp(false);
+
     setCurrentPage("dashboard");
 
     setEmail("");
     setPassword("");
+    setOtp("");
+
     setMessage("");
+    setOtpMessage("");
 
     setLoading(false);
   };
 
-  // =========================
-  // 載入中
-  // =========================
+  // =====================
+  // 初始化載入
+  // =====================
 
   if (loading) {
     return (
-      <div
-        className="atlas-login-page"
-        style={{
-          minHeight: "100vh",
-          width: "100%",
-        }}
-      >
+      <div className="atlas-login-page">
         <div className="atlas-login-card">
+
           <div className="atlas-login-logo">
             🦊
           </div>
@@ -191,36 +353,113 @@ function App() {
           >
             載入中...
           </div>
+
         </div>
       </div>
     );
   }
 
-  // =========================
-  // 登入畫面
-  // =========================
+  // =====================
+  // OTP 驗證畫面
+  // =====================
+
+  if (needOtp && !loggedIn) {
+    return (
+      <div className="atlas-login-page">
+
+        <div className="atlas-login-card">
+
+          <div className="atlas-login-logo">
+            🔐
+          </div>
+
+          <h1>
+            OTP 驗證
+          </h1>
+
+          <p>
+            請開啟你的 Authenticator
+            <br />
+            輸入 6 位數驗證碼
+          </p>
+
+          <form
+            onSubmit={handleOtpVerify}
+          >
+
+            <label>
+              驗證碼
+            </label>
+
+            <input
+              className="atlas-input"
+              type="text"
+              value={otp}
+              maxLength={6}
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              placeholder="000000"
+              onChange={(e) => {
+                setOtp(
+                  e.target.value.replace(
+                    /\D/g,
+                    ""
+                  )
+                );
+              }}
+              required
+            />
+
+            <button
+              className="atlas-login-button"
+              type="submit"
+              disabled={otpLoading}
+            >
+              {otpLoading
+                ? "驗證中..."
+                : "驗證登入"}
+            </button>
+
+          </form>
+
+          {otpMessage && (
+            <div className="atlas-message">
+              {otpMessage}
+            </div>
+          )}
+
+        </div>
+
+      </div>
+    );
+  }
+
+  // =====================
+  // Email + 密碼登入畫面
+  // =====================
 
   if (!loggedIn) {
     return (
-      <div
-        className="atlas-login-page"
-        style={{
-          minHeight: "100vh",
-          width: "100%",
-        }}
-      >
+      <div className="atlas-login-page">
+
         <div className="atlas-login-card">
+
           <div className="atlas-login-logo">
             🦊
           </div>
 
-          <h1>Atlas OS</h1>
+          <h1>
+            Atlas OS
+          </h1>
 
           <p>
             個人管理作業系統
           </p>
 
-          <form onSubmit={handleLogin}>
+          <form
+            onSubmit={handleLogin}
+          >
+
             <label>
               Email
             </label>
@@ -262,6 +501,7 @@ function App() {
                 ? "登入中..."
                 : "登入 Atlas OS"}
             </button>
+
           </form>
 
           {message && (
@@ -269,97 +509,60 @@ function App() {
               {message}
             </div>
           )}
+
         </div>
+
       </div>
     );
   }
 
-  // =========================
-  // Atlas OS 主系統
-  // =========================
+  // =====================
+  // 主系統
   //
-  // 這裡是這次真正修正的地方。
+  // 這裡刻意不增加
+  // margin-left / width / main
+  // 等版面控制。
   //
-  // 用 CSS Grid 強制：
-  //
-  // 左邊 = Sidebar 280px
-  // 右邊 = 主內容剩餘空間
-  //
-  // 不再讓 Sidebar 把 main 往下面推。
-  // 不需要修改 App.css。
-  // 不需要修改 Sidebar.css。
-  // =========================
+  // 直接沿用原本 App.css
+  // + Sidebar.css 的版面。
+  // =====================
 
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns:
-          "280px minmax(0, 1fr)",
-        minHeight: "100vh",
-        width: "100%",
-        margin: 0,
-        padding: 0,
-      }}
-    >
-      {/* =====================
-          左側 Sidebar
-         ===================== */}
-
+    <>
       <Sidebar
         currentPage={currentPage}
         onNavigate={setCurrentPage}
         onLogout={handleLogout}
       />
 
-      {/* =====================
-          右側主內容
-         ===================== */}
+      <div className="atlas-main-inner">
 
-      <main
-        style={{
-          minWidth: 0,
-          width: "100%",
-          minHeight: "100vh",
-          boxSizing: "border-box",
-          overflowX: "hidden",
-        }}
-      >
-        <div
-          className="atlas-main-inner"
-          style={{
-            width: "100%",
-            maxWidth: "none",
-            minWidth: 0,
-            boxSizing: "border-box",
-          }}
-        >
-          {currentPage === "dashboard" && (
-            <Dashboard />
-          )}
+        {currentPage === "dashboard" && (
+          <Dashboard />
+        )}
 
-          {currentPage === "study" && (
-            <StudyCenter />
-          )}
+        {currentPage === "study" && (
+          <StudyCenter />
+        )}
 
-          {currentPage === "care" && (
-            <CareCenter />
-          )}
+        {currentPage === "care" && (
+          <CareCenter />
+        )}
 
-          {currentPage === "stock" && (
-            <StockCenter />
-          )}
+        {currentPage === "stock" && (
+          <StockCenter />
+        )}
 
-          {currentPage === "schedule" && (
-            <ScheduleCenter />
-          )}
+        {currentPage === "schedule" && (
+          <ScheduleCenter />
+        )}
 
-          {currentPage === "settings" && (
-            <SettingsCenter />
-          )}
-        </div>
-      </main>
-    </div>
+        {currentPage === "settings" && (
+          <SettingsCenter />
+        )}
+
+      </div>
+    </>
   );
 }
 
