@@ -26,14 +26,14 @@ type Page =
 
 function App() {
   // =====================
-  // 頁面
+  // 系統頁面
   // =====================
 
   const [currentPage, setCurrentPage] =
     useState<Page>("dashboard");
 
   // =====================
-  // 登入
+  // 登入狀態
   // =====================
 
   const [email, setEmail] =
@@ -46,7 +46,7 @@ function App() {
     useState(false);
 
   const [loading, setLoading] =
-    useState(false);
+    useState(true);
 
   const [message, setMessage] =
     useState("");
@@ -66,6 +66,7 @@ function App() {
       if (!mounted) return;
 
       setLoggedIn(!!session);
+      setLoading(false);
     };
 
     checkSession();
@@ -141,9 +142,8 @@ function App() {
       return;
     }
 
-    // 密碼正確後直接進入 Atlas OS
-    // 不在這裡做 OTP 驗證
-
+    // Supabase 登入成功
+    // 不再進入任何自製 OTP 畫面
     setLoggedIn(true);
     setCurrentPage("dashboard");
 
@@ -164,6 +164,28 @@ function App() {
     setPassword("");
     setMessage("");
   };
+
+  // =====================
+  // 初始化載入
+  // =====================
+
+  if (loading) {
+    return (
+      <div className="atlas-login-page">
+        <div className="atlas-login-card">
+          <div className="atlas-login-logo">
+            🦊
+          </div>
+
+          <h1>Atlas OS</h1>
+
+          <p>
+            正在確認登入狀態...
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   // =====================
   // 登入畫面
@@ -203,6 +225,7 @@ function App() {
                 setEmail(e.target.value)
               }
               required
+              autoComplete="email"
             />
 
             <label>
@@ -218,6 +241,7 @@ function App() {
                 setPassword(e.target.value)
               }
               required
+              autoComplete="current-password"
             />
 
             <button
@@ -244,7 +268,7 @@ function App() {
   }
 
   // =====================
-  // 主系統
+  // Atlas OS 主系統
   // =====================
 
   return (
