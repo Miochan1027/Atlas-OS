@@ -1,0 +1,101 @@
+/* =========================
+   Atlas OS Sidebar
+   ========================= */
+
+.sidebar {
+  width: 250px;
+  min-width: 250px;
+  height: 100vh;
+  position: sticky;
+  top: 0;
+
+  box-sizing: border-box;
+  padding: 28px 22px;
+
+  background: #fffdfb;
+  border-right: 1px solid #e7ddd4;
+
+  display: flex;
+  flex-direction: column;
+
+  color: #665348;
+}
+
+/* Atlas Logo */
+
+.sidebar-brand {
+  padding: 0 14px 28px;
+
+  font-size: 22px;
+  font-weight: 600;
+
+  color: #665348;
+}
+
+/* Navigation */
+
+.sidebar nav {
+  flex: 1;
+}
+
+.sidebar ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sidebar li {
+  padding: 13px 14px;
+
+  border-radius: 12px;
+
+  font-size: 17px;
+  color: #665348;
+
+  cursor: pointer;
+
+  transition:
+    background 0.18s ease,
+    color 0.18s ease;
+}
+
+.sidebar li:hover {
+  background: #f7f1eb;
+}
+
+.sidebar li.active {
+  background: #f3ece5;
+  color: #665348;
+  font-weight: 600;
+}
+
+/* Logout */
+
+.sidebar-logout {
+  width: 100%;
+
+  padding: 11px 14px;
+
+  border: 1px solid #dfd4ca;
+  border-radius: 10px;
+
+  background: #fffdfb;
+  color: #806f63;
+
+  font-size: 15px;
+
+  cursor: pointer;
+
+  transition:
+    background 0.18s ease,
+    border-color 0.18s ease;
+}
+
+.sidebar-logout:hover {
+  background: #f8f3ee;
+  border-color: #cdbfb4;
+}

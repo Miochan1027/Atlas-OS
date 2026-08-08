@@ -1,0 +1,175 @@
+/* =========================
+   Atlas OS Dashboard
+   ========================= */
+
+.page-section {
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 42px 44px 70px;
+  box-sizing: border-box;
+}
+
+/* 頁面標題 */
+
+.page-section > h1 {
+  margin: 0;
+  color: #665348;
+  font-size: 32px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+}
+
+.page-section > p {
+  margin: 10px 0 30px;
+  color: #9a8b81;
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+/* =========================
+   卡片
+   ========================= */
+
+.page-card {
+  background: #fffdfb;
+  border: 1px solid #eee5de;
+  border-radius: 20px;
+  padding: 26px 28px;
+  margin-bottom: 22px;
+  box-shadow: 0 5px 20px rgba(80, 60, 40, 0.045);
+  box-sizing: border-box;
+}
+
+.page-card h2 {
+  margin: 0 0 18px;
+  color: #665348;
+  font-size: 21px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.page-card p {
+  color: #806f63;
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+/* =========================
+   今日總覽
+   ========================= */
+
+.page-card:first-of-type {
+  padding-bottom: 28px;
+}
+
+.page-card:first-of-type > div {
+  width: 100%;
+}
+
+/* =========================
+   小卡片
+   ========================= */
+
+.page-card div[style*="background"] {
+  border: 1px solid #eee7e1;
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.page-card div[style*="background"]:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 5px 16px rgba(80, 60, 40, 0.06);
+}
+
+/* =========================
+   進度條
+   ========================= */
+
+.page-card div[style*="height: 12px"] {
+  margin-top: 12px;
+}
+
+/* =========================
+   按鈕
+   ========================= */
+
+.page-card button {
+  margin-top: 8px;
+  padding: 9px 16px;
+  border: 1px solid #dfd4ca;
+  border-radius: 10px;
+  background: #fffdfb;
+  color: #806f63;
+  font-size: 14px;
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    transform 0.2s ease;
+}
+
+.page-card button:hover {
+  background: #f7f1eb;
+  border-color: #cdbfb3;
+  transform: translateY(-1px);
+}
+
+/* =========================
+   行程 / 今日重點
+   ========================= */
+
+.page-card ul {
+  margin: 10px 0 18px;
+  padding-left: 22px;
+}
+
+.page-card li {
+  color: #806f63;
+  line-height: 1.8;
+  margin-bottom: 5px;
+}
+
+/* =========================
+   數字
+   ========================= */
+
+.page-card strong {
+  color: #665348;
+}
+
+/* =========================
+   RWD
+   ========================= */
+
+@media (max-width: 900px) {
+  .page-section {
+    padding: 32px 24px 60px;
+  }
+
+  .page-section > h1 {
+    font-size: 28px;
+  }
+}
+
+@media (max-width: 600px) {
+  .page-section {
+    padding: 24px 16px 50px;
+  }
+
+  .page-section > h1 {
+    font-size: 24px;
+  }
+
+  .page-card {
+    padding: 22px 20px;
+    border-radius: 16px;
+  }
+
+  .page-card h2 {
+    font-size: 19px;
+  }
+}
