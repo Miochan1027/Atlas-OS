@@ -25,11 +25,15 @@ type Page =
   | "settings";
 
 function App() {
+  // =====================
+  // 頁面
+  // =====================
+
   const [currentPage, setCurrentPage] =
     useState<Page>("dashboard");
 
   // =====================
-  // 登入資料
+  // 登入
   // =====================
 
   const [email, setEmail] =
@@ -37,16 +41,6 @@ function App() {
 
   const [password, setPassword] =
     useState("");
-
-  const [otp, setOtp] =
-    useState("");
-
-  // =====================
-  // 狀態
-  // =====================
-
-  const [needOtp, setNeedOtp] =
-    useState(false);
 
   const [loggedIn, setLoggedIn] =
     useState(false);
@@ -62,32 +56,32 @@ function App() {
   // =====================
 
   useEffect(() => {
+    let mounted = true;
+
+    const checkSession = async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!mounted) return;
+
+      setLoggedIn(!!session);
+    };
+
     checkSession();
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(
       (_event, session) => {
-        if (!session) {
-          setLoggedIn(false);
-          setNeedOtp(false);
-          return;
-        }
+        if (!mounted) return;
 
-        // 只有完成 OTP 驗證後才進入系統
-        const otpPassed =
-          sessionStorage.getItem(
-            "atlas_otp_verified"
-          ) === "true";
-
-        if (otpPassed) {
-          setLoggedIn(true);
-          setNeedOtp(false);
-        }
+        setLoggedIn(!!session);
       }
     );
 
     return () => {
+      mounted = false;
       subscription.unsubscribe();
     };
   }, []);
@@ -120,37 +114,7 @@ function App() {
   }, []);
 
   // =====================
-  // Session 檢查
-  // =====================
-
-  const checkSession = async () => {
-    const {
-      data: { session },
-    } =
-      await supabase.auth.getSession();
-
-    if (!session) {
-      setLoggedIn(false);
-      return;
-    }
-
-    const otpPassed =
-      sessionStorage.getItem(
-        "atlas_otp_verified"
-      ) === "true";
-
-    if (otpPassed) {
-      setLoggedIn(true);
-      setNeedOtp(false);
-    } else {
-      // 有 Supabase Session，但尚未完成 Atlas OTP
-      setLoggedIn(false);
-      setNeedOtp(true);
-    }
-  };
-
-  // =====================
-  // Email + 密碼登入
+  // 登入
   // =====================
 
   const handleLogin = async (
@@ -161,18 +125,12 @@ function App() {
     setLoading(true);
     setMessage("");
 
-    // 清除上一個登入狀態
-    sessionStorage.removeItem(
-      "atlas_otp_verified"
-    );
-
     const {
       error,
-    } =
-      await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
+    } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
 
     if (error) {
       setMessage(
@@ -183,96 +141,11 @@ function App() {
       return;
     }
 
-    // 密碼正確
-    // 不直接進 Atlas
-    // 進入 OTP 驗證頁
+    // 密碼正確後直接進入 Atlas OS
+    // 不在這裡做 OTP 驗證
 
-    setNeedOtp(true);
-    setLoggedIn(false);
-    setOtp("");
-    setLoading(false);
-  };
-
-  // =====================
-  // OTP 驗證
-  // =====================
-
-  const handleOtpVerify = async (
-    e: FormEvent
-  ) => {
-    e.preventDefault();
-
-    if (otp.length !== 6) {
-      setMessage(
-        "請輸入 6 位數驗證碼"
-      );
-      return;
-    }
-
-    setLoading(true);
-    setMessage("");
-
-    try {
-      // 呼叫 Supabase Edge Function
-      const {
-        data,
-        error,
-      } =
-        await supabase.functions.invoke(
-          "atlas-otp",
-          {
-            body: {
-              action: "verify",
-              otp,
-            },
-          }
-        );
-
-      if (error) {
-        throw error;
-      }
-
-      if (
-        !data ||
-        data.success !== true
-      ) {
-        setMessage(
-          data?.message ||
-            "驗證碼錯誤，請重新輸入"
-        );
-
-        setOtp("");
-        setLoading(false);
-        return;
-      }
-
-      // =====================
-      // OTP 驗證成功
-      // =====================
-
-      sessionStorage.setItem(
-        "atlas_otp_verified",
-        "true"
-      );
-
-      setNeedOtp(false);
-      setLoggedIn(true);
-      setOtp("");
-      setCurrentPage("dashboard");
-      setMessage("");
-
-    } catch (error) {
-      console.error(
-        "OTP verification error:",
-        error
-      );
-
-      setMessage(
-        "OTP 驗證服務暫時無法使用，請稍後再試"
-      );
-
-      setOtp("");
-    }
+    setLoggedIn(true);
+    setCurrentPage("dashboard");
 
     setLoading(false);
   };
@@ -284,90 +157,13 @@ function App() {
   const handleLogout = async () => {
     await supabase.auth.signOut();
 
-    sessionStorage.removeItem(
-      "atlas_otp_verified"
-    );
-
     setLoggedIn(false);
-    setNeedOtp(false);
     setCurrentPage("dashboard");
 
     setEmail("");
     setPassword("");
-    setOtp("");
     setMessage("");
   };
-
-  // =====================
-  // OTP 畫面
-  // =====================
-
-  if (needOtp && !loggedIn) {
-    return (
-      <div className="atlas-login-page">
-        <div className="atlas-login-card">
-
-          <div className="atlas-login-logo">
-            🔐
-          </div>
-
-          <h1>
-            OTP 驗證
-          </h1>
-
-          <p>
-            請開啟你的 Authenticator
-            <br />
-            輸入 6 位數驗證碼
-          </p>
-
-          <form
-            onSubmit={handleOtpVerify}
-          >
-
-            <input
-              className="atlas-input"
-              value={otp}
-              maxLength={6}
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              placeholder="000000"
-              onChange={(e) =>
-                setOtp(
-                  e.target.value.replace(
-                    /\D/g,
-                    ""
-                  )
-                )
-              }
-              required
-            />
-
-            <button
-              className="atlas-login-button"
-              type="submit"
-              disabled={
-                loading ||
-                otp.length !== 6
-              }
-            >
-              {loading
-                ? "驗證中..."
-                : "驗證登入"}
-            </button>
-
-          </form>
-
-          {message && (
-            <div className="atlas-message">
-              {message}
-            </div>
-          )}
-
-        </div>
-      </div>
-    );
-  }
 
   // =====================
   // 登入畫面
@@ -376,7 +172,6 @@ function App() {
   if (!loggedIn) {
     return (
       <div className="atlas-login-page">
-
         <div className="atlas-login-card">
 
           <div className="atlas-login-logo">
@@ -405,9 +200,7 @@ function App() {
               value={email}
               placeholder="輸入 Email"
               onChange={(e) =>
-                setEmail(
-                  e.target.value
-                )
+                setEmail(e.target.value)
               }
               required
             />
@@ -422,9 +215,7 @@ function App() {
               value={password}
               placeholder="輸入密碼"
               onChange={(e) =>
-                setPassword(
-                  e.target.value
-                )
+                setPassword(e.target.value)
               }
               required
             />
@@ -453,7 +244,7 @@ function App() {
   }
 
   // =====================
-  // Atlas OS 主系統
+  // 主系統
   // =====================
 
   return (

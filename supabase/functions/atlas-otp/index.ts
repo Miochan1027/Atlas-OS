@@ -1,6 +1,19 @@
+// @ts-nocheck
 import "@supabase/functions-js/edge-runtime.d.ts";
 
-import { createClient } from "npm:@supabase/supabase-js@2";
+const runtime = globalThis as typeof globalThis & {
+  Deno: {
+    env: {
+      get(name: string): string | undefined;
+    };
+  };
+};
+
+const SUPABASE_URL =
+  runtime.Deno.env.get("SUPABASE_URL") ?? "";
+
+const SUPABASE_SERVICE_ROLE_KEY =
+  runtime.Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -8,42 +21,46 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods":
     "POST, OPTIONS",
+  "Content-Type":
+    "application/json; charset=utf-8",
 };
 
-const SUPABASE_URL =
-  Deno.env.get("SUPABASE_URL")!;
+function json(
+  data: unknown,
+  status = 200,
+) {
+  return new Response(
+    JSON.stringify(data),
+    {
+      status,
+      headers: corsHeaders,
+    },
+  );
+}
 
-const SUPABASE_ANON_KEY =
-  Deno.env.get("SUPABASE_ANON_KEY")!;
+/* =========================================================
+   Base32
+   ========================================================= */
 
-const SUPABASE_SERVICE_ROLE_KEY =
-  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-
-
-// ============================================================
-// Base32
-// ============================================================
-
-const BASE32_ALPHABET =
+const BASE32_CHARS =
   "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 
-
-function base32Encode(bytes: Uint8Array): string {
-
+function base32Encode(
+  bytes: Uint8Array,
+): string {
   let bits = 0;
   let value = 0;
   let output = "";
 
   for (const byte of bytes) {
-
-    value = (value << 8) | byte;
+    value =
+      (value << 8) | byte;
     bits += 8;
 
     while (bits >= 5) {
-
       output +=
-        BASE32_ALPHABET[
-          (value >>> (bits - 5)) & 31
+        BASE32_CHARS[
+          (value >> (bits - 5)) & 31
         ];
 
       bits -= 5;
@@ -51,9 +68,8 @@ function base32Encode(bytes: Uint8Array): string {
   }
 
   if (bits > 0) {
-
     output +=
-      BASE32_ALPHABET[
+      BASE32_CHARS[
         (value << (5 - bits)) & 31
       ];
   }
@@ -61,27 +77,25 @@ function base32Encode(bytes: Uint8Array): string {
   return output;
 }
 
-
-function base32Decode(input: string): Uint8Array {
-
+function base32Decode(
+  input: string,
+): Uint8Array {
   const clean =
     input
-      .replace(/=+$/g, "")
       .toUpperCase()
-      .replace(/\s/g, "");
-
-  const output: number[] = [];
+      .replace(/[^A-Z2-7]/g, "");
 
   let bits = 0;
   let value = 0;
 
-  for (const char of clean) {
+  const output: number[] = [];
 
+  for (const char of clean) {
     const index =
-      BASE32_ALPHABET.indexOf(char);
+      BASE32_CHARS.indexOf(char);
 
     if (index === -1) {
-      throw new Error("Invalid Base32 secret");
+      continue;
     }
 
     value =
@@ -90,9 +104,8 @@ function base32Decode(input: string): Uint8Array {
     bits += 5;
 
     if (bits >= 8) {
-
       output.push(
-        (value >>> (bits - 8)) & 255
+        (value >> (bits - 8)) & 255,
       );
 
       bits -= 8;
@@ -102,33 +115,37 @@ function base32Decode(input: string): Uint8Array {
   return new Uint8Array(output);
 }
 
-
-// ============================================================
-// 產生 Secret
-// ============================================================
+/* =========================================================
+   Secure random secret
+   ========================================================= */
 
 function generateSecret(): string {
-
   const bytes =
-    crypto.getRandomValues(
-      new Uint8Array(20)
-    );
+    new Uint8Array(20);
+
+  crypto.getRandomValues(bytes);
 
   return base32Encode(bytes);
 }
 
-
-// ============================================================
-// TOTP
-// ============================================================
+/* =========================================================
+   TOTP
+   RFC 6238 / SHA-1 / 30 seconds
+   ========================================================= */
 
 async function generateTotp(
   secret: string,
-  counter: number,
+  timestamp = Date.now(),
 ): Promise<string> {
-
   const secretBytes =
     base32Decode(secret);
+
+  const counter =
+    BigInt(
+      Math.floor(
+        timestamp / 1000 / 30,
+      ),
+    );
 
   const counterBytes =
     new Uint8Array(8);
@@ -136,18 +153,16 @@ async function generateTotp(
   let temp = counter;
 
   for (let i = 7; i >= 0; i--) {
-
     counterBytes[i] =
-      temp & 0xff;
+      Number(temp & 0xffn);
 
-    temp =
-      Math.floor(temp / 256);
+    temp >>= 8n;
   }
 
   const key =
     await crypto.subtle.importKey(
       "raw",
-      secretBytes,
+      secretBytes.buffer as ArrayBuffer,
       {
         name: "HMAC",
         hash: "SHA-1",
@@ -156,14 +171,15 @@ async function generateTotp(
       ["sign"],
     );
 
-  const hash =
-    new Uint8Array(
-      await crypto.subtle.sign(
-        "HMAC",
-        key,
-        counterBytes,
-      )
+  const signature =
+    await crypto.subtle.sign(
+      "HMAC",
+      key,
+      counterBytes.buffer as ArrayBuffer,
     );
+
+  const hash =
+    new Uint8Array(signature);
 
   const offset =
     hash[hash.length - 1] & 0x0f;
@@ -171,9 +187,9 @@ async function generateTotp(
   const binary =
     (
       ((hash[offset] & 0x7f) << 24) |
-      ((hash[offset + 1] & 0xff) << 16) |
-      ((hash[offset + 2] & 0xff) << 8) |
-      (hash[offset + 3] & 0xff)
+      (hash[offset + 1] << 16) |
+      (hash[offset + 2] << 8) |
+      hash[offset + 3]
     ) >>> 0;
 
   const otp =
@@ -184,37 +200,42 @@ async function generateTotp(
     .padStart(6, "0");
 }
 
-
-// ============================================================
-// 驗證 TOTP
-// ============================================================
+/* =========================================================
+   Verify TOTP
+   Allow ±1 time window
+   ========================================================= */
 
 async function verifyTotp(
   secret: string,
   code: string,
 ): Promise<boolean> {
+  const cleanCode =
+    code.replace(/\D/g, "");
 
-  if (!/^\d{6}$/.test(code)) {
+  if (cleanCode.length !== 6) {
     return false;
   }
 
-  const currentCounter =
-    Math.floor(
-      Date.now() / 1000 / 30
-    );
+  const now =
+    Date.now();
 
-  // 容許前後一個 30 秒
-  // 避免手機與伺服器時間有些微誤差
+  const windows = [
+    -1,
+    0,
+    1,
+  ];
 
-  for (const offset of [-1, 0, 1]) {
-
+  for (const offset of windows) {
     const expected =
       await generateTotp(
         secret,
-        currentCounter + offset,
+        now + offset * 30_000,
       );
 
-    if (expected === code) {
+    if (
+      expected ===
+      cleanCode
+    ) {
       return true;
     }
   }
@@ -222,515 +243,454 @@ async function verifyTotp(
   return false;
 }
 
+/* =========================================================
+   Get authenticated Supabase user
+   ========================================================= */
 
-// ============================================================
-// Response
-// ============================================================
-
-function json(
-  body: unknown,
-  status = 200,
+async function getUser(
+  request: Request,
 ) {
+  const authHeader =
+    request.headers.get(
+      "Authorization",
+    );
 
-  return new Response(
-    JSON.stringify(body),
-    {
-      status,
+  if (
+    !authHeader ||
+    !authHeader.startsWith(
+      "Bearer ",
+    )
+  ) {
+    return null;
+  }
+
+  const accessToken =
+    authHeader.substring(7);
+
+  const response =
+    await fetch(
+      `${SUPABASE_URL}/auth/v1/user`,
+      {
+        method: "GET",
+        headers: {
+          Authorization:
+            `Bearer ${accessToken}`,
+          apikey:
+            SUPABASE_SERVICE_ROLE_KEY,
+        },
+      },
+    );
+
+  if (!response.ok) {
+    return null;
+  }
+
+  return await response.json();
+}
+
+/* =========================================================
+   Database helpers
+   ========================================================= */
+
+async function getOtpRecord(
+  userId: string,
+) {
+  const url =
+    `${SUPABASE_URL}/rest/v1/atlas_otp` +
+    `?user_id=eq.${encodeURIComponent(userId)}` +
+    `&select=user_id,secret,enabled` +
+    `&limit=1`;
+
+  const response =
+    await fetch(url, {
+      method: "GET",
       headers: {
-        ...corsHeaders,
+        apikey:
+          SUPABASE_SERVICE_ROLE_KEY,
+        Authorization:
+          `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      },
+    });
+
+  if (!response.ok) {
+    throw new Error(
+      "讀取 OTP 設定失敗",
+    );
+  }
+
+  const rows =
+    await response.json();
+
+  return rows.length > 0
+    ? rows[0]
+    : null;
+}
+
+async function saveOtpRecord(
+  userId: string,
+  secret: string,
+  enabled: boolean,
+) {
+  const response =
+    await fetch(
+      `${SUPABASE_URL}/rest/v1/atlas_otp`,
+      {
+        method: "POST",
+        headers: {
+          apikey:
+            SUPABASE_SERVICE_ROLE_KEY,
+          Authorization:
+            `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+          "Content-Type":
+            "application/json",
+          Prefer:
+            "resolution=merge-duplicates,return=representation",
+        },
+        body: JSON.stringify({
+          user_id: userId,
+          secret,
+          enabled,
+        }),
+      },
+    );
+
+  if (!response.ok) {
+    const text =
+      await response.text();
+
+    throw new Error(
+      `儲存 OTP 設定失敗：${text}`,
+    );
+  }
+
+  return await response.json();
+}
+
+async function updateOtpEnabled(
+  userId: string,
+  enabled: boolean,
+) {
+  const url =
+    `${SUPABASE_URL}/rest/v1/atlas_otp` +
+    `?user_id=eq.${encodeURIComponent(userId)}`;
+
+  const response =
+    await fetch(url, {
+      method: "PATCH",
+      headers: {
+        apikey:
+          SUPABASE_SERVICE_ROLE_KEY,
+        Authorization:
+          `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
         "Content-Type":
           "application/json",
       },
-    },
-  );
+      body: JSON.stringify({
+        enabled,
+      }),
+    });
+
+  if (!response.ok) {
+    const text =
+      await response.text();
+
+    throw new Error(
+      `更新 OTP 狀態失敗：${text}`,
+    );
+  }
 }
 
+/* =========================================================
+   Main Function
+   ========================================================= */
 
-// ============================================================
-// Main
-// ============================================================
+Deno.serve(
+  async (request: Request) => {
+    try {
+      /* -----------------------------------------
+         CORS
+      ----------------------------------------- */
 
-Deno.serve(async (req) => {
-
-  // ----------------------------------------------------------
-  // CORS
-  // ----------------------------------------------------------
-
-  if (req.method === "OPTIONS") {
-
-    return new Response(
-      "ok",
-      {
-        headers: corsHeaders,
-      },
-    );
-  }
-
-
-  if (req.method !== "POST") {
-
-    return json(
-      {
-        success: false,
-        message: "Method not allowed",
-      },
-      405,
-    );
-  }
-
-
-  try {
-
-    // --------------------------------------------------------
-    // 取得登入使用者
-    // --------------------------------------------------------
-
-    const authorization =
-      req.headers.get(
-        "Authorization"
-      );
-
-    if (!authorization) {
-
-      return json(
-        {
-          success: false,
-          message: "未登入",
-        },
-        401,
-      );
-    }
-
-
-    const accessToken =
-      authorization.replace(
-        "Bearer ",
-        "",
-      );
-
-
-    // 用一般 Supabase client
-    // 驗證目前登入的 User
-
-    const supabaseAuth =
-      createClient(
-        SUPABASE_URL,
-        SUPABASE_ANON_KEY,
-        {
-          global: {
-            headers: {
-              Authorization:
-                `Bearer ${accessToken}`,
-            },
+      if (
+        request.method ===
+        "OPTIONS"
+      ) {
+        return new Response(
+          "ok",
+          {
+            headers:
+              corsHeaders,
           },
-        },
-      );
-
-
-    const {
-      data: {
-        user,
-      },
-      error: userError,
-    } =
-      await supabaseAuth.auth.getUser();
-
-
-    if (
-      userError ||
-      !user
-    ) {
-
-      return json(
-        {
-          success: false,
-          message: "登入狀態無效",
-        },
-        401,
-      );
-    }
-
-
-    // --------------------------------------------------------
-    // Admin Client
-    // --------------------------------------------------------
-
-    const supabaseAdmin =
-      createClient(
-        SUPABASE_URL,
-        SUPABASE_SERVICE_ROLE_KEY,
-        {
-          auth: {
-            autoRefreshToken: false,
-            persistSession: false,
-          },
-        },
-      );
-
-
-    // --------------------------------------------------------
-    // 取得前端要求
-    // --------------------------------------------------------
-
-    const body =
-      await req.json();
-
-    const action =
-      body?.action;
-
-
-    // ========================================================
-    // SETUP
-    // ========================================================
-
-    if (action === "setup") {
-
-      const secret =
-        generateSecret();
-
-
-      const email =
-        user.email ??
-        user.id;
-
-
-      const issuer =
-        "Atlas OS";
-
-
-      const label =
-        `${issuer}:${email}`;
-
-
-      const otpauthUri =
-        `otpauth://totp/${encodeURIComponent(label)}` +
-        `?secret=${secret}` +
-        `&issuer=${encodeURIComponent(issuer)}` +
-        `&algorithm=SHA1` +
-        `&digits=6` +
-        `&period=30`;
-
-
-      // ------------------------------------------------------
-      // 寫入 atlas_otp
-      // ------------------------------------------------------
-
-      const {
-        error: upsertError,
-      } =
-        await supabaseAdmin
-          .from("atlas_otp")
-          .upsert(
-            {
-              user_id: user.id,
-              secret,
-              enabled: false,
-            },
-            {
-              onConflict:
-                "user_id",
-            },
-          );
-
-
-      if (upsertError) {
-
-        console.error(
-          upsertError,
         );
+      }
 
+      if (
+        request.method !==
+        "POST"
+      ) {
         return json(
           {
-            success: false,
-            message:
-              "OTP 設定儲存失敗",
+            error:
+              "只接受 POST",
+          },
+          405,
+        );
+      }
+
+      /* -----------------------------------------
+         Environment
+      ----------------------------------------- */
+
+      if (
+        !SUPABASE_URL ||
+        !SUPABASE_SERVICE_ROLE_KEY
+      ) {
+        return json(
+          {
+            error:
+              "Supabase Function 環境變數未設定",
           },
           500,
         );
       }
 
+      /* -----------------------------------------
+         Authentication
+      ----------------------------------------- */
 
-      return json({
-        success: true,
+      const user =
+        await getUser(request);
 
-        message:
-          "OTP 設定建立成功",
-
-        // Secure SignIn App
-        // 掃描這個 URI 對應的 QR Code
-        otpauthUri,
-
-        // 提供前端必要資訊
-        issuer,
-        account: email,
-      });
-    }
-
-
-    // ========================================================
-    // VERIFY
-    // ========================================================
-
-    if (action === "verify") {
-
-      const code =
-        String(
-          body?.code ?? ""
-        ).trim();
-
-
-      if (!/^\d{6}$/.test(code)) {
-
+      if (!user?.id) {
         return json(
           {
-            success: false,
-            message:
-              "OTP 必須是 6 位數字",
-          },
-          400,
-        );
-      }
-
-
-      // ------------------------------------------------------
-      // 取得使用者 OTP Secret
-      // ------------------------------------------------------
-
-      const {
-        data: otpRecord,
-        error: otpError,
-      } =
-        await supabaseAdmin
-          .from("atlas_otp")
-          .select(
-            "secret, enabled"
-          )
-          .eq(
-            "user_id",
-            user.id
-          )
-          .maybeSingle();
-
-
-      if (otpError) {
-
-        console.error(
-          otpError,
-        );
-
-        return json(
-          {
-            success: false,
-            message:
-              "讀取 OTP 設定失敗",
-          },
-          500,
-        );
-      }
-
-
-      if (!otpRecord) {
-
-        return json(
-          {
-            success: false,
-            message:
-              "尚未建立 OTP",
-          },
-          400,
-        );
-      }
-
-
-      // ------------------------------------------------------
-      // 驗證 OTP
-      // ------------------------------------------------------
-
-      const valid =
-        await verifyTotp(
-          otpRecord.secret,
-          code,
-        );
-
-
-      if (!valid) {
-
-        return json(
-          {
-            success: false,
-            message:
-              "OTP 驗證失敗",
+            error:
+              "未登入或登入已過期",
           },
           401,
         );
       }
 
+      const userId =
+        user.id;
 
-      // ------------------------------------------------------
-      // 第一次驗證成功
-      // → 啟用 OTP
-      // ------------------------------------------------------
+      /* -----------------------------------------
+         Request body
+      ----------------------------------------- */
 
-      if (!otpRecord.enabled) {
+      const body =
+        await request.json();
 
-        const {
-          error: enableError,
-        } =
-          await supabaseAdmin
-            .from("atlas_otp")
-            .update({
-              enabled: true,
-            })
-            .eq(
-              "user_id",
-              user.id
-            );
+      const action =
+        body?.action;
 
+      /* =================================================
+         SETUP
+         建立新的 Atlas OTP
+      ================================================= */
 
-        if (enableError) {
-
-          console.error(
-            enableError,
+      if (
+        action ===
+        "setup"
+      ) {
+        const existing =
+          await getOtpRecord(
+            userId,
           );
 
+        /*
+         * 如果已經有啟用中的 OTP，
+         * 不重新產生 Secret。
+         */
+        if (
+          existing &&
+          existing.enabled
+        ) {
+          return json({
+            success: true,
+            enabled: true,
+            alreadySetup:
+              true,
+          });
+        }
+
+        const secret =
+          generateSecret();
+
+        await saveOtpRecord(
+          userId,
+          secret,
+          false,
+        );
+
+        const issuer =
+          "Atlas OS";
+
+        const account =
+          user.email ??
+          userId;
+
+        const otpauth =
+          `otpauth://totp/` +
+          `${encodeURIComponent(
+            issuer,
+          )}:${encodeURIComponent(
+            account,
+          )}` +
+          `?secret=${secret}` +
+          `&issuer=${encodeURIComponent(
+            issuer,
+          )}` +
+          `&algorithm=SHA1` +
+          `&digits=6` +
+          `&period=30`;
+
+        return json({
+          success: true,
+          enabled: false,
+          secret,
+          otpauth,
+        });
+      }
+
+      /* =================================================
+         VERIFY
+         驗證 Authenticator 的 6 位數 OTP
+      ================================================= */
+
+      if (
+        action ===
+        "verify"
+      ) {
+        const code =
+          String(
+            body?.code ??
+              "",
+          );
+
+        const record =
+          await getOtpRecord(
+            userId,
+          );
+
+        if (!record) {
           return json(
             {
               success: false,
-              message:
-                "OTP 啟用失敗",
+              error:
+                "尚未建立 OTP",
             },
-            500,
+            400,
           );
         }
-      }
 
-
-      return json({
-        success: true,
-        verified: true,
-        message:
-          "OTP 驗證成功",
-      });
-    }
-
-
-    // ========================================================
-    // CHECK
-    // ========================================================
-
-    if (action === "check") {
-
-      const {
-        data: otpRecord,
-        error: otpError,
-      } =
-        await supabaseAdmin
-          .from("atlas_otp")
-          .select(
-            "enabled"
-          )
-          .eq(
-            "user_id",
-            user.id
-          )
-          .maybeSingle();
-
-
-      if (otpError) {
-
-        console.error(
-          otpError,
-        );
-
-        return json(
-          {
-            success: false,
-            message:
-              "無法取得 OTP 狀態",
-          },
-          500,
-        );
-      }
-
-
-      return json({
-        success: true,
-
-        enabled:
-          otpRecord?.enabled === true,
-      });
-    }
-
-
-    // ========================================================
-    // RESET
-    // ========================================================
-
-    if (action === "reset") {
-
-      const {
-        error: deleteError,
-      } =
-        await supabaseAdmin
-          .from("atlas_otp")
-          .delete()
-          .eq(
-            "user_id",
-            user.id
+        const valid =
+          await verifyTotp(
+            record.secret,
+            code,
           );
 
-
-      if (deleteError) {
-
-        console.error(
-          deleteError,
-        );
-
-        return json(
-          {
+        if (!valid) {
+          return json({
             success: false,
-            message:
-              "OTP 重設失敗",
-          },
-          500,
+            verified: false,
+            error:
+              "驗證碼錯誤或已過期",
+          });
+        }
+
+        await updateOtpEnabled(
+          userId,
+          true,
         );
+
+        return json({
+          success: true,
+          verified: true,
+          enabled: true,
+        });
       }
 
+      /* =================================================
+         STATUS
+         查詢目前是否已啟用 OTP
+      ================================================= */
 
-      return json({
-        success: true,
-        message:
-          "OTP 已重設",
-      });
+      if (
+        action ===
+        "status"
+      ) {
+        const record =
+          await getOtpRecord(
+            userId,
+          );
+
+        return json({
+          success: true,
+          enabled:
+            record?.enabled ===
+            true,
+          configured:
+            !!record,
+        });
+      }
+
+      /* =================================================
+         DISABLE
+         關閉 Atlas OTP
+      ================================================= */
+
+      if (
+        action ===
+        "disable"
+      ) {
+        const record =
+          await getOtpRecord(
+            userId,
+          );
+
+        if (!record) {
+          return json({
+            success: true,
+            enabled: false,
+          });
+        }
+
+        await updateOtpEnabled(
+          userId,
+          false,
+        );
+
+        return json({
+          success: true,
+          enabled: false,
+        });
+      }
+
+      return json(
+        {
+          success: false,
+          error:
+            "未知的 action",
+        },
+        400,
+      );
+    } catch (error) {
+      console.error(
+        "atlas-otp error:",
+        error,
+      );
+
+      return json(
+        {
+          success: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : "伺服器發生錯誤",
+        },
+        500,
+      );
     }
-
-
-    // --------------------------------------------------------
-    // 未知 action
-    // --------------------------------------------------------
-
-    return json(
-      {
-        success: false,
-        message:
-          "未知的 action",
-      },
-      400,
-    );
-
-  } catch (error) {
-
-    console.error(
-      error,
-    );
-
-    return json(
-      {
-        success: false,
-        message:
-          "OTP Function 發生錯誤",
-      },
-      500,
-    );
-  }
-});
+  },
+);
