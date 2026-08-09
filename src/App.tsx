@@ -25,40 +25,66 @@ type Page =
   | "settings";
 
 function App() {
-  // =====================
+  // =====================================================
   // 頁面
-  // =====================
+  // =====================================================
 
   const [currentPage, setCurrentPage] =
     useState<Page>("dashboard");
 
-  // =====================
+  // =====================================================
   // 登入
-  // =====================
+  // =====================================================
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
-  const [otp, setOtp] = useState("");
-
   const [loggedIn, setLoggedIn] = useState(false);
-  const [needOtp, setNeedOtp] = useState(false);
-
   const [loading, setLoading] = useState(true);
-  const [otpLoading, setOtpLoading] = useState(false);
-
   const [message, setMessage] = useState("");
-  const [otpMessage, setOtpMessage] = useState("");
 
-  // =====================
-  // OTP 驗證狀態
-  // =====================
+  // =====================================================
+  // 忘記密碼
+  // =====================================================
 
-  const OTP_SESSION_KEY = "atlas_otp_verified";
+  const [forgotPasswordMode, setForgotPasswordMode] =
+    useState(false);
 
-  // =====================
+  const [resetEmail, setResetEmail] =
+    useState("");
+
+  const [resetMessage, setResetMessage] =
+    useState("");
+
+  const [resetLoading, setResetLoading] =
+    useState(false);
+
+  // =====================================================
+  // 重設密碼
+  // =====================================================
+
+  const [passwordRecoveryMode, setPasswordRecoveryMode] =
+    useState(false);
+
+  const [newPassword, setNewPassword] =
+    useState("");
+
+  const [confirmPassword, setConfirmPassword] =
+    useState("");
+
+  const [passwordResetMessage, setPasswordResetMessage] =
+    useState("");
+
+  const [passwordResetLoading, setPasswordResetLoading] =
+    useState(false);
+
+  // =====================================================
   // 初始化 Session
-  // =====================
+  //
+  // 注意：
+  // 這裡完全不檢查 MFA / AAL。
+  // 有 Session 就直接視為登入。
+  // =====================================================
 
   useEffect(() => {
     let mounted = true;
@@ -70,24 +96,7 @@ function App() {
 
       if (!mounted) return;
 
-      const otpVerified =
-        sessionStorage.getItem(OTP_SESSION_KEY) === "1";
-
-      if (session && otpVerified) {
-        // 已登入 + 本次瀏覽階段已完成 OTP
-        setLoggedIn(true);
-        setNeedOtp(false);
-      } else if (session && !otpVerified) {
-        // 有 Supabase Session，
-        // 但尚未完成 OTP
-        setLoggedIn(false);
-        setNeedOtp(true);
-      } else {
-        // 完全沒有登入
-        setLoggedIn(false);
-        setNeedOtp(false);
-      }
-
+      setLoggedIn(!!session);
       setLoading(false);
     };
 
@@ -96,22 +105,32 @@ function App() {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
+      (event, session) => {
         if (!mounted) return;
 
-        const otpVerified =
-          sessionStorage.getItem(OTP_SESSION_KEY) === "1";
+        // =================================================
+        // Supabase 密碼重設流程
+        // 使用者點擊 Email 裡的重設連結後，
+        // Supabase 會觸發 PASSWORD_RECOVERY。
+        // =================================================
 
-        if (session && otpVerified) {
-          setLoggedIn(true);
-          setNeedOtp(false);
-        } else if (session && !otpVerified) {
+        if (event === "PASSWORD_RECOVERY") {
+          setPasswordRecoveryMode(true);
+          setForgotPasswordMode(false);
           setLoggedIn(false);
-          setNeedOtp(true);
-        } else {
-          setLoggedIn(false);
-          setNeedOtp(false);
+          setLoading(false);
+          return;
         }
+
+        // =================================================
+        // 一般登入 / 登出
+        //
+        // 不檢查 MFA。
+        // 不檢查 AAL。
+        // =================================================
+
+        setLoggedIn(!!session);
+        setLoading(false);
       }
     );
 
@@ -121,9 +140,9 @@ function App() {
     };
   }, []);
 
-  // =====================
+  // =====================================================
   // Sidebar 導覽
-  // =====================
+  // =====================================================
 
   useEffect(() => {
     const handler = (event: Event) => {
@@ -148,9 +167,9 @@ function App() {
     };
   }, []);
 
-  // =====================
+  // =====================================================
   // Email + 密碼登入
-  // =====================
+  // =====================================================
 
   const handleLogin = async (
     e: FormEvent
@@ -160,181 +179,230 @@ function App() {
     setLoading(true);
     setMessage("");
 
-    // 每次重新登入，
-    // 都必須重新完成 OTP
-    sessionStorage.removeItem(
-      OTP_SESSION_KEY
-    );
-
     const {
-      data,
       error,
-    } =
-      await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password,
-      });
+    } = await supabase.auth.signInWithPassword({
+      email: email.trim(),
+      password,
+    });
 
-    if (error || !data.session) {
-      setMessage("帳號或密碼錯誤");
+    if (error) {
+      console.error(
+        "Login error:",
+        error
+      );
+
+      setMessage(
+        "帳號或密碼錯誤，請重新確認。"
+      );
+
       setLoading(false);
       return;
     }
 
-    // 密碼正確
-    // 不直接進入 Atlas OS
-    // 必須先進 OTP
-    setLoggedIn(false);
-    setNeedOtp(true);
+    // =================================================
+    // 登入成功
+    // =================================================
 
-    setOtp("");
-    setOtpMessage("");
+    setLoggedIn(true);
+    setCurrentPage("dashboard");
+
+    setPassword("");
+    setMessage("");
 
     setLoading(false);
   };
 
-  // =====================
-  // OTP 驗證
-  // =====================
+  // =====================================================
+  // 忘記密碼：寄送重設信
+  // =====================================================
 
-  const handleOtpVerify = async (
+  const handleForgotPassword = async (
     e: FormEvent
   ) => {
     e.preventDefault();
 
-    const code = otp.trim();
+    const targetEmail =
+      resetEmail.trim();
 
-    // 基本檢查
-    if (!/^\d{6}$/.test(code)) {
-      setOtpMessage(
-        "請輸入 6 位數 OTP 驗證碼"
+    if (!targetEmail) {
+      setResetMessage(
+        "請先輸入你的 Email。"
       );
       return;
     }
 
-    setOtpLoading(true);
-    setOtpMessage("");
+    setResetLoading(true);
+    setResetMessage("");
 
     try {
-      // 呼叫 Supabase Edge Function
-      //
-      // 注意：
-      // atlas-otp 要的是 code
-      // 不是 otp
       const {
-        data,
         error,
       } =
-        await supabase.functions.invoke(
-          "atlas-otp",
+        await supabase.auth.resetPasswordForEmail(
+          targetEmail,
           {
-            body: {
-              action: "verify",
-              code,
-            },
+            redirectTo:
+              window.location.origin,
           }
         );
 
       if (error) {
         console.error(
-          "atlas-otp error:",
+          "Reset password error:",
           error
         );
 
-        setOtpMessage(
-          "OTP 驗證失敗，請稍後再試"
+        setResetMessage(
+          `寄送失敗：${error.message}`
         );
 
-        setOtpLoading(false);
         return;
       }
 
-      // Edge Function 回傳：
-      // { success: true, verified: true }
-      if (
-        !data ||
-        data.success !== true ||
-        data.verified !== true
-      ) {
-        setOtpMessage(
-          data?.message ||
-            "OTP 驗證碼錯誤"
-        );
-
-        setOtpLoading(false);
-        return;
-      }
-
-      // =====================
-      // OTP 成功
-      // =====================
-
-      sessionStorage.setItem(
-        OTP_SESSION_KEY,
-        "1"
+      setResetMessage(
+        "✅ 密碼重設信已寄出！請到你的 Email 收信，點擊信件中的重設連結。"
       );
-
-      setOtp("");
-      setOtpMessage("");
-
-      setNeedOtp(false);
-      setLoggedIn(true);
-      setCurrentPage("dashboard");
-
-      setOtpLoading(false);
     } catch (error) {
       console.error(
-        "OTP verification exception:",
+        "Reset password exception:",
         error
       );
 
-      setOtpMessage(
-        "OTP 驗證發生錯誤，請稍後再試"
+      setResetMessage(
+        "寄送重設信時發生錯誤，請稍後再試。"
       );
-
-      setOtpLoading(false);
+    } finally {
+      setResetLoading(false);
     }
   };
 
-  // =====================
+  // =====================================================
+  // 更新新密碼
+  // =====================================================
+
+  const handleUpdatePassword = async (
+    e: FormEvent
+  ) => {
+    e.preventDefault();
+
+    setPasswordResetMessage("");
+
+    if (newPassword.length < 6) {
+      setPasswordResetMessage(
+        "新密碼至少需要 6 個字元。"
+      );
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setPasswordResetMessage(
+        "兩次輸入的新密碼不一致。"
+      );
+      return;
+    }
+
+    setPasswordResetLoading(true);
+
+    try {
+      const {
+        error,
+      } = await supabase.auth.updateUser({
+        password: newPassword,
+      });
+
+      if (error) {
+        console.error(
+          "Update password error:",
+          error
+        );
+
+        setPasswordResetMessage(
+          `密碼更新失敗：${error.message}`
+        );
+
+        return;
+      }
+
+      setPasswordResetMessage(
+        "✅ 密碼已成功更新！"
+      );
+
+      setNewPassword("");
+      setConfirmPassword("");
+
+      // 稍微停一下，讓使用者看得到成功訊息
+      setTimeout(() => {
+        setPasswordRecoveryMode(false);
+        setLoggedIn(true);
+        setCurrentPage("dashboard");
+      }, 800);
+    } catch (error) {
+      console.error(
+        "Update password exception:",
+        error
+      );
+
+      setPasswordResetMessage(
+        "更新密碼時發生錯誤，請稍後再試。"
+      );
+    } finally {
+      setPasswordResetLoading(false);
+    }
+  };
+
+  // =====================================================
   // 登出
-  // =====================
+  // =====================================================
 
   const handleLogout = async () => {
     setLoading(true);
 
     await supabase.auth.signOut();
 
-    // 登出後清除 OTP 驗證狀態
-    sessionStorage.removeItem(
-      OTP_SESSION_KEY
-    );
-
     setLoggedIn(false);
-    setNeedOtp(false);
-
     setCurrentPage("dashboard");
 
     setEmail("");
     setPassword("");
-    setOtp("");
-
     setMessage("");
-    setOtpMessage("");
 
     setLoading(false);
   };
 
-  // =====================
-  // 初始化載入
-  // =====================
+  // =====================================================
+  // 初始載入
+  // =====================================================
 
   if (loading) {
     return (
-      <div className="atlas-login-page">
-        <div className="atlas-login-card">
-
-          <div className="atlas-login-logo">
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "#f7f2ed",
+        }}
+      >
+        <div
+          style={{
+            width: "360px",
+            padding: "40px",
+            background: "#fff",
+            borderRadius: "20px",
+            boxShadow:
+              "0 8px 30px rgba(0,0,0,0.08)",
+            textAlign: "center",
+          }}
+        >
+          <div
+            className="atlas-login-logo"
+            style={{
+              fontSize: "48px",
+              marginBottom: "12px",
+            }}
+          >
             🦊
           </div>
 
@@ -346,121 +414,367 @@ function App() {
 
           <div
             style={{
-              textAlign: "center",
               marginTop: "24px",
               color: "#927d6d",
             }}
           >
             載入中...
           </div>
-
         </div>
       </div>
     );
   }
 
-  // =====================
-  // OTP 驗證畫面
-  // =====================
+  // =====================================================
+  // 密碼重設畫面
+  // =====================================================
 
-  if (needOtp && !loggedIn) {
+  if (passwordRecoveryMode) {
     return (
-      <div className="atlas-login-page">
-
-        <div className="atlas-login-card">
-
-          <div className="atlas-login-logo">
-            🔐
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "#f7f2ed",
+          padding: "20px",
+          boxSizing: "border-box",
+        }}
+      >
+        <div
+          style={{
+            width: "100%",
+            maxWidth: "420px",
+            padding: "40px",
+            background: "#fff",
+            borderRadius: "20px",
+            boxShadow:
+              "0 8px 30px rgba(0,0,0,0.08)",
+            boxSizing: "border-box",
+          }}
+        >
+          <div
+            style={{
+              textAlign: "center",
+              fontSize: "48px",
+              marginBottom: "10px",
+            }}
+          >
+            🔑
           </div>
 
-          <h1>
-            OTP 驗證
+          <h1
+            style={{
+              textAlign: "center",
+              marginBottom: "10px",
+            }}
+          >
+            設定新密碼
           </h1>
 
-          <p>
-            請開啟你的 Authenticator
-            <br />
-            輸入 6 位數驗證碼
+          <p
+            style={{
+              textAlign: "center",
+              color: "#777",
+              lineHeight: 1.7,
+              marginBottom: "28px",
+            }}
+          >
+            請輸入你的新密碼。
           </p>
 
           <form
-            onSubmit={handleOtpVerify}
+            onSubmit={handleUpdatePassword}
           >
-
-            <label>
-              驗證碼
+            <label
+              style={{
+                display: "block",
+                marginBottom: "8px",
+                fontWeight: 600,
+              }}
+            >
+              新密碼
             </label>
 
             <input
               className="atlas-input"
-              type="text"
-              value={otp}
-              maxLength={6}
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              placeholder="000000"
-              onChange={(e) => {
-                setOtp(
-                  e.target.value.replace(
-                    /\D/g,
-                    ""
-                  )
-                );
+              type="password"
+              value={newPassword}
+              placeholder="輸入新密碼"
+              autoComplete="new-password"
+              onChange={(e) =>
+                setNewPassword(
+                  e.target.value
+                )
+              }
+              required
+            />
+
+            <label
+              style={{
+                display: "block",
+                marginTop: "18px",
+                marginBottom: "8px",
+                fontWeight: 600,
               }}
+            >
+              確認新密碼
+            </label>
+
+            <input
+              className="atlas-input"
+              type="password"
+              value={confirmPassword}
+              placeholder="再次輸入新密碼"
+              autoComplete="new-password"
+              onChange={(e) =>
+                setConfirmPassword(
+                  e.target.value
+                )
+              }
               required
             />
 
             <button
               className="atlas-login-button"
               type="submit"
-              disabled={otpLoading}
+              disabled={
+                passwordResetLoading
+              }
+              style={{
+                marginTop: "22px",
+                width: "100%",
+              }}
             >
-              {otpLoading
-                ? "驗證中..."
-                : "驗證登入"}
+              {passwordResetLoading
+                ? "更新中..."
+                : "更新密碼"}
             </button>
-
           </form>
 
-          {otpMessage && (
-            <div className="atlas-message">
-              {otpMessage}
+          {passwordResetMessage && (
+            <div
+              className="atlas-message"
+              style={{
+                marginTop: "18px",
+              }}
+            >
+              {passwordResetMessage}
             </div>
           )}
-
         </div>
-
       </div>
     );
   }
 
-  // =====================
-  // Email + 密碼登入畫面
-  // =====================
+  // =====================================================
+  // 忘記密碼畫面
+  // =====================================================
+
+  if (forgotPasswordMode) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "#f7f2ed",
+          padding: "20px",
+          boxSizing: "border-box",
+        }}
+      >
+        <div
+          style={{
+            width: "100%",
+            maxWidth: "420px",
+            padding: "40px",
+            background: "#fff",
+            borderRadius: "20px",
+            boxShadow:
+              "0 8px 30px rgba(0,0,0,0.08)",
+            boxSizing: "border-box",
+          }}
+        >
+          <div
+            style={{
+              textAlign: "center",
+              fontSize: "48px",
+              marginBottom: "10px",
+            }}
+          >
+            🔐
+          </div>
+
+          <h1
+            style={{
+              textAlign: "center",
+              marginBottom: "10px",
+            }}
+          >
+            忘記密碼
+          </h1>
+
+          <p
+            style={{
+              textAlign: "center",
+              color: "#777",
+              lineHeight: 1.7,
+              marginBottom: "28px",
+            }}
+          >
+            輸入你的帳號 Email，
+            <br />
+            我們會寄送密碼重設連結給你。
+          </p>
+
+          <form
+            onSubmit={handleForgotPassword}
+          >
+            <label
+              style={{
+                display: "block",
+                marginBottom: "8px",
+                fontWeight: 600,
+              }}
+            >
+              Email
+            </label>
+
+            <input
+              className="atlas-input"
+              type="email"
+              value={resetEmail}
+              placeholder="輸入 Email"
+              autoComplete="email"
+              onChange={(e) =>
+                setResetEmail(
+                  e.target.value
+                )
+              }
+              required
+            />
+
+            <button
+              className="atlas-login-button"
+              type="submit"
+              disabled={resetLoading}
+              style={{
+                marginTop: "20px",
+                width: "100%",
+              }}
+            >
+              {resetLoading
+                ? "寄送中..."
+                : "寄送重設密碼信"}
+            </button>
+          </form>
+
+          {resetMessage && (
+            <div
+              className="atlas-message"
+              style={{
+                marginTop: "18px",
+                lineHeight: 1.7,
+              }}
+            >
+              {resetMessage}
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={() => {
+              setForgotPasswordMode(false);
+              setResetMessage("");
+            }}
+            style={{
+              display: "block",
+              width: "100%",
+              marginTop: "20px",
+              padding: "10px",
+              border: "none",
+              background: "transparent",
+              color: "#927d6d",
+              cursor: "pointer",
+            }}
+          >
+            ← 返回登入
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // =====================================================
+  // 登入畫面
+  // =====================================================
 
   if (!loggedIn) {
     return (
-      <div className="atlas-login-page">
-
-        <div className="atlas-login-card">
-
-          <div className="atlas-login-logo">
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "#f7f2ed",
+          padding: "20px",
+          boxSizing: "border-box",
+        }}
+      >
+        <div
+          style={{
+            width: "100%",
+            maxWidth: "420px",
+            padding: "40px",
+            background: "#fff",
+            borderRadius: "20px",
+            boxShadow:
+              "0 8px 30px rgba(0,0,0,0.08)",
+            boxSizing: "border-box",
+          }}
+        >
+          <div
+            className="atlas-login-logo"
+            style={{
+              textAlign: "center",
+              fontSize: "48px",
+              marginBottom: "10px",
+            }}
+          >
             🦊
           </div>
 
-          <h1>
+          <h1
+            style={{
+              textAlign: "center",
+            }}
+          >
             Atlas OS
           </h1>
 
-          <p>
+          <p
+            style={{
+              textAlign: "center",
+              color: "#777",
+              marginBottom: "28px",
+            }}
+          >
             個人管理作業系統
           </p>
 
           <form
             onSubmit={handleLogin}
           >
-
-            <label>
+            <label
+              style={{
+                display: "block",
+                marginBottom: "8px",
+                fontWeight: 600,
+              }}
+            >
               Email
             </label>
 
@@ -471,12 +785,21 @@ function App() {
               placeholder="輸入 Email"
               autoComplete="email"
               onChange={(e) =>
-                setEmail(e.target.value)
+                setEmail(
+                  e.target.value
+                )
               }
               required
             />
 
-            <label>
+            <label
+              style={{
+                display: "block",
+                marginTop: "18px",
+                marginBottom: "8px",
+                fontWeight: 600,
+              }}
+            >
               密碼
             </label>
 
@@ -487,7 +810,9 @@ function App() {
               placeholder="輸入密碼"
               autoComplete="current-password"
               onChange={(e) =>
-                setPassword(e.target.value)
+                setPassword(
+                  e.target.value
+                )
               }
               required
             />
@@ -496,73 +821,138 @@ function App() {
               className="atlas-login-button"
               type="submit"
               disabled={loading}
+              style={{
+                width: "100%",
+                marginTop: "20px",
+              }}
             >
               {loading
                 ? "登入中..."
                 : "登入 Atlas OS"}
             </button>
-
           </form>
 
+          {/* =================================================
+              忘記密碼
+          ================================================= */}
+
+          <button
+            type="button"
+            onClick={() => {
+              setForgotPasswordMode(true);
+              setResetEmail(email);
+              setMessage("");
+            }}
+            style={{
+              display: "block",
+              width: "100%",
+              marginTop: "18px",
+              padding: "10px",
+              border: "none",
+              background: "transparent",
+              color: "#927d6d",
+              cursor: "pointer",
+              fontSize: "14px",
+            }}
+          >
+            忘記密碼？
+          </button>
+
           {message && (
-            <div className="atlas-message">
+            <div
+              className="atlas-message"
+              style={{
+                marginTop: "10px",
+              }}
+            >
               {message}
             </div>
           )}
-
         </div>
-
       </div>
     );
   }
 
-  // =====================
+  // =====================================================
   // 主系統
-  //
-  // 這裡刻意不增加
-  // margin-left / width / main
-  // 等版面控制。
-  //
-  // 直接沿用原本 App.css
-  // + Sidebar.css 的版面。
-  // =====================
+  // =====================================================
 
   return (
-    <>
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns:
+          "280px minmax(0, 1fr)",
+        minHeight: "100vh",
+        width: "100%",
+        margin: 0,
+        padding: 0,
+      }}
+    >
+      {/* =================================================
+          左側 Sidebar
+      ================================================= */}
+
       <Sidebar
         currentPage={currentPage}
         onNavigate={setCurrentPage}
         onLogout={handleLogout}
       />
 
-      <div className="atlas-main-inner">
+      {/* =================================================
+          右側主內容
+      ================================================= */}
 
-        {currentPage === "dashboard" && (
-          <Dashboard />
-        )}
+      <main
+        style={{
+          gridColumn: "2",
+          minWidth: 0,
+          width: "100%",
+          minHeight: "100vh",
+          margin: 0,
+          padding: 0,
+          boxSizing: "border-box",
+          position: "relative",
+          overflowX: "hidden",
+        }}
+      >
+        <div
+          className="atlas-main-inner"
+          style={{
+            width: "100%",
+            minWidth: 0,
+            maxWidth: "none",
+            margin: 0,
+            boxSizing: "border-box",
+            position: "relative",
+          }}
+        >
+          {currentPage === "dashboard" && (
+            <Dashboard />
+          )}
 
-        {currentPage === "study" && (
-          <StudyCenter />
-        )}
+          {currentPage === "study" && (
+            <StudyCenter />
+          )}
 
-        {currentPage === "care" && (
-          <CareCenter />
-        )}
+          {currentPage === "care" && (
+            <CareCenter />
+          )}
 
-        {currentPage === "stock" && (
-          <StockCenter />
-        )}
+          {currentPage === "stock" && (
+            <StockCenter />
+          )}
 
-        {currentPage === "schedule" && (
-          <ScheduleCenter />
-        )}
+          {currentPage === "schedule" && (
+            <ScheduleCenter />
+          )}
 
-        {currentPage === "settings" && (
-          <SettingsCenter />
-        )}
-
-      </div>
-    </>
+          {currentPage === "settings" && (
+            <SettingsCenter />
+          )}
+        </div>
+      </main>
+    </div>
   );
 }
 
