@@ -1,22 +1,23 @@
 import { useEffect, useMemo, useState } from "react";
+import { supabase } from "../lib/supabase";
 
-type CareLog = {
+type CareCategory =
+  | "今日狀態"
+  | "飲食"
+  | "身體紀錄"
+  | "服用藥物"
+  | "其他";
+
+type CareRecord = {
   id: string;
-  date: string;
-  category: string;
+  user_id: string;
+  record_date: string;
+  category: CareCategory;
   content: string;
+  created_at: string;
 };
 
-const careTasks = [
-  "早餐",
-  "午餐",
-  "晚餐",
-  "今日狀態",
-  "身體紀錄",
-  "服用藥物",
-];
-
-const careCategories = [
+const categories: CareCategory[] = [
   "今日狀態",
   "飲食",
   "身體紀錄",
@@ -24,728 +25,1371 @@ const careCategories = [
   "其他",
 ];
 
+const categoryEmoji: Record<CareCategory, string> = {
+  今日狀態: "📋",
+  飲食: "🍚",
+  身體紀錄: "🩺",
+  服用藥物: "💊",
+  其他: "📝",
+};
+
+function getToday() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function formatDate(date: string) {
+  if (!date) return "";
+
+  const parts = date.split("-");
+
+  if (parts.length !== 3) {
+    return date;
+  }
+
+  return `${parts[0]}-${parts[1]}-${parts[2]}`;
+}
+
 function CareCenter() {
-  const today = new Date().toLocaleDateString("en-CA");
-
   // =====================================================
-  // State
+  // 狀態
   // =====================================================
 
-  const [activeTab, setActiveTab] = useState<
-    "daily" | "history"
-  >("daily");
+  const [records, setRecords] = useState<CareRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
-  const [completedTasks, setCompletedTasks] =
-    useState<string[]>(() => {
-      const saved =
-        localStorage.getItem("atlas-care-tasks");
+  const [message, setMessage] = useState("");
 
-      if (!saved) return [];
+  // =====================================================
+  // 新增紀錄
+  // =====================================================
 
-      try {
-        return JSON.parse(saved) as string[];
-      } catch {
-        return [];
-      }
-    });
+  const [recordDate, setRecordDate] =
+    useState(getToday());
 
-  const [careLogs, setCareLogs] = useState<CareLog[]>(
-    () => {
-      const saved =
-        localStorage.getItem("atlas-care-logs");
-
-      if (!saved) return [];
-
-      try {
-        return JSON.parse(saved) as CareLog[];
-      } catch {
-        return [];
-      }
-    }
-  );
-
-  const [selectedCategory, setSelectedCategory] =
-    useState("今日狀態");
+  const [category, setCategory] =
+    useState<CareCategory>("今日狀態");
 
   const [content, setContent] = useState("");
 
-  // 回診報表日期
-  const [historyStart, setHistoryStart] =
-    useState("");
-
-  const [historyEnd, setHistoryEnd] =
-    useState(today);
-
   // =====================================================
-  // LocalStorage
+  // 歷程篩選
   // =====================================================
 
-  useEffect(() => {
-    localStorage.setItem(
-      "atlas-care-tasks",
-      JSON.stringify(completedTasks)
-    );
-  }, [completedTasks]);
+  const [searchText, setSearchText] = useState("");
 
-  useEffect(() => {
-    localStorage.setItem(
-      "atlas-care-logs",
-      JSON.stringify(careLogs)
-    );
-  }, [careLogs]);
+  const [startDate, setStartDate] = useState("");
+
+  const [endDate, setEndDate] = useState(getToday());
 
   // =====================================================
-  // 今日照護
+  // 載入資料
   // =====================================================
 
-  const toggleTask = (task: string) => {
-    setCompletedTasks((current) => {
-      if (current.includes(task)) {
-        return current.filter(
-          (item) => item !== task
-        );
+  const loadRecords = async () => {
+    setLoading(true);
+    setMessage("");
+
+    try {
+      const {
+        data: {
+          user,
+        },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        setMessage("目前尚未登入。");
+        setRecords([]);
+        return;
       }
 
-      return [...current, task];
-    });
+      const {
+        data,
+        error,
+      } = await supabase
+        .from("care_records")
+        .select(
+          `
+            id,
+            user_id,
+            record_date,
+            category,
+            content,
+            created_at
+          `
+        )
+        .eq("user_id", user.id)
+        .order("record_date", {
+          ascending: false,
+        })
+        .order("created_at", {
+          ascending: false,
+        });
+
+      if (error) {
+        console.error(
+          "Care records loading error:",
+          error
+        );
+
+        setMessage(
+          `讀取照護紀錄失敗：${error.message}`
+        );
+
+        return;
+      }
+
+      setRecords(
+        (data ?? []) as CareRecord[]
+      );
+    } catch (error) {
+      console.error(
+        "Care records loading exception:",
+        error
+      );
+
+      setMessage(
+        "讀取照護紀錄時發生錯誤。"
+      );
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const completedCount = completedTasks.length;
-  const totalTasks = careTasks.length;
+  // =====================================================
+  // 初始化
+  // =====================================================
 
-  const todayProgress =
-    totalTasks === 0
-      ? 0
-      : Math.round(
-          (completedCount / totalTasks) * 100
-        );
+  useEffect(() => {
+    loadRecords();
+  }, []);
 
   // =====================================================
   // 新增照護紀錄
   // =====================================================
 
-  const addCareLog = () => {
-    if (!content.trim()) return;
+  const handleAddRecord = async () => {
+    const text = content.trim();
 
-    const newLog: CareLog = {
-      id: Date.now().toString(),
-      date: today,
-      category: selectedCategory,
-      content: content.trim(),
-    };
+    if (!text) {
+      setMessage("請先輸入照護紀錄內容。");
+      return;
+    }
 
-    setCareLogs((current) => [
-      newLog,
-      ...current,
-    ]);
+    if (!recordDate) {
+      setMessage("請選擇紀錄日期。");
+      return;
+    }
 
-    setContent("");
-  };
+    setSaving(true);
+    setMessage("");
 
-  const deleteCareLog = (id: string) => {
-    setCareLogs((current) =>
-      current.filter((log) => log.id !== id)
-    );
-  };
+    try {
+      const {
+        data: {
+          user,
+        },
+      } = await supabase.auth.getUser();
 
-  // =====================================================
-  // 今日資料
-  // =====================================================
-
-  const todayLogs = careLogs.filter(
-    (log) => log.date === today
-  );
-
-  // =====================================================
-  // 回診歷程報表
-  // =====================================================
-
-  const filteredHistoryLogs = useMemo(() => {
-    return careLogs
-      .filter((log) => {
-        if (
-          historyStart &&
-          log.date < historyStart
-        ) {
-          return false;
-        }
-
-        if (
-          historyEnd &&
-          log.date > historyEnd
-        ) {
-          return false;
-        }
-
-        return true;
-      })
-      .sort((a, b) => {
-        if (a.date !== b.date) {
-          return b.date.localeCompare(a.date);
-        }
-
-        return b.id.localeCompare(a.id);
-      });
-  }, [careLogs, historyStart, historyEnd]);
-
-  const historyDays = new Set(
-    filteredHistoryLogs.map((log) => log.date)
-  ).size;
-
-  // =====================================================
-  // 類別統計
-  // =====================================================
-
-  const categoryStats = careCategories.map(
-    (category) => ({
-      category,
-      count: filteredHistoryLogs.filter(
-        (log) => log.category === category
-      ).length,
-    })
-  );
-
-  // =====================================================
-  // 每日分組
-  // =====================================================
-
-  const historyByDate = useMemo(() => {
-    const grouped: Record<string, CareLog[]> = {};
-
-    filteredHistoryLogs.forEach((log) => {
-      if (!grouped[log.date]) {
-        grouped[log.date] = [];
+      if (!user) {
+        setMessage("登入狀態已失效，請重新登入。");
+        return;
       }
 
-      grouped[log.date].push(log);
+      const {
+        data,
+        error,
+      } = await supabase
+        .from("care_records")
+        .insert({
+          user_id: user.id,
+          record_date: recordDate,
+          category,
+          content: text,
+        })
+        .select(
+          `
+            id,
+            user_id,
+            record_date,
+            category,
+            content,
+            created_at
+          `
+        )
+        .single();
+
+      if (error) {
+        console.error(
+          "Care record insert error:",
+          error
+        );
+
+        setMessage(
+          `新增紀錄失敗：${error.message}`
+        );
+
+        return;
+      }
+
+      if (data) {
+        setRecords((current) => [
+          data as CareRecord,
+          ...current,
+        ]);
+      }
+
+      setContent("");
+
+      setMessage("✅ 照護紀錄已儲存。");
+    } catch (error) {
+      console.error(
+        "Care record insert exception:",
+        error
+      );
+
+      setMessage(
+        "新增照護紀錄時發生錯誤。"
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // =====================================================
+  // 刪除紀錄
+  // =====================================================
+
+  const handleDeleteRecord = async (
+    id: string
+  ) => {
+    const confirmed = window.confirm(
+      "確定要刪除這筆照護紀錄嗎？"
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setMessage("");
+
+    try {
+      const {
+        data: {
+          user,
+        },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        setMessage("登入狀態已失效。");
+        return;
+      }
+
+      const {
+        error,
+      } = await supabase
+        .from("care_records")
+        .delete()
+        .eq("id", id)
+        .eq("user_id", user.id);
+
+      if (error) {
+        console.error(
+          "Care record delete error:",
+          error
+        );
+
+        setMessage(
+          `刪除失敗：${error.message}`
+        );
+
+        return;
+      }
+
+      setRecords((current) =>
+        current.filter(
+          (record) => record.id !== id
+        )
+      );
+
+      setMessage("紀錄已刪除。");
+    } catch (error) {
+      console.error(
+        "Care record delete exception:",
+        error
+      );
+
+      setMessage(
+        "刪除照護紀錄時發生錯誤。"
+      );
+    }
+  };
+
+  // =====================================================
+  // 篩選歷程
+  // =====================================================
+
+  const filteredRecords = useMemo(() => {
+    const keyword =
+      searchText.trim().toLowerCase();
+
+    return records.filter((record) => {
+      const matchKeyword =
+        !keyword ||
+        record.content
+          .toLowerCase()
+          .includes(keyword) ||
+        record.category
+          .toLowerCase()
+          .includes(keyword) ||
+        record.record_date.includes(keyword);
+
+      const matchStart =
+        !startDate ||
+        record.record_date >= startDate;
+
+      const matchEnd =
+        !endDate ||
+        record.record_date <= endDate;
+
+      return (
+        matchKeyword &&
+        matchStart &&
+        matchEnd
+      );
+    });
+  }, [
+    records,
+    searchText,
+    startDate,
+    endDate,
+  ]);
+
+  // =====================================================
+  // 依日期整理紀錄
+  // =====================================================
+
+  const groupedRecords = useMemo(() => {
+    const groups: Record<
+      string,
+      CareRecord[]
+    > = {};
+
+    filteredRecords.forEach((record) => {
+      if (!groups[record.record_date]) {
+        groups[record.record_date] = [];
+      }
+
+      groups[record.record_date].push(record);
     });
 
-    return Object.entries(grouped).sort((a, b) =>
-      b[0].localeCompare(a[0])
+    return Object.entries(groups).sort(
+      ([dateA], [dateB]) =>
+        dateB.localeCompare(dateA)
     );
-  }, [filteredHistoryLogs]);
+  }, [filteredRecords]);
 
   // =====================================================
-  // 列印
+  // 清除篩選
   // =====================================================
 
-  const printMedicalReport = () => {
+  const clearFilters = () => {
+    setSearchText("");
+    setStartDate("");
+    setEndDate(getToday());
+  };
+
+  // =====================================================
+  // 列印回診紀錄
+  //
+  // 這裡是這次最重要的修正：
+  // 不列印整個 CareCenter 畫面。
+  //
+  // @media print 時：
+  // - 網頁全部隱藏
+  // - 只顯示 .care-print-area
+  // =====================================================
+
+  const printMedicalRecords = () => {
+    if (filteredRecords.length === 0) {
+      window.alert(
+        "目前沒有符合條件的照護紀錄可以列印。"
+      );
+
+      return;
+    }
+
     window.print();
   };
 
   // =====================================================
-  // UI
+  // 今日紀錄
+  // =====================================================
+
+  const todayRecords = records.filter(
+    (record) =>
+      record.record_date === getToday()
+  );
+
+  // =====================================================
+  // 畫面
   // =====================================================
 
   return (
-    <section className="page-section">
-      <h1>❤️ 爸爸照護</h1>
-
-      <p>
-        Atlas OS 爸爸照護紀錄中心
-      </p>
-
+    <>
       {/* =================================================
-          分頁
+          正常網頁
       ================================================= */}
 
       <div
+        className="care-screen"
         style={{
-          display: "flex",
-          gap: "10px",
-          marginBottom: "24px",
-          borderBottom: "1px solid #ddd",
-          paddingBottom: "12px",
+          width: "100%",
+          boxSizing: "border-box",
         }}
       >
-        <button
-          type="button"
-          onClick={() => setActiveTab("daily")}
+        <div
           style={{
-            padding: "10px 18px",
-            borderRadius: "10px",
-            border: "none",
-            cursor: "pointer",
-            fontWeight:
-              activeTab === "daily"
-                ? 700
-                : 400,
-            background:
-              activeTab === "daily"
-                ? "#C8B59B"
-                : "#F3F3F3",
+            maxWidth: "1100px",
+            margin: "0 auto",
+            padding: "30px",
+            boxSizing: "border-box",
           }}
         >
-          📝 日常紀錄
-        </button>
+          {/* =================================================
+              頁面標題
+          ================================================= */}
 
-        <button
-          type="button"
-          onClick={() => setActiveTab("history")}
-          style={{
-            padding: "10px 18px",
-            borderRadius: "10px",
-            border: "none",
-            cursor: "pointer",
-            fontWeight:
-              activeTab === "history"
-                ? 700
-                : 400,
-            background:
-              activeTab === "history"
-                ? "#C8B59B"
-                : "#F3F3F3",
-          }}
-        >
-          🩺 歷程報表
-        </button>
-      </div>
+          <div
+            style={{
+              marginBottom: "28px",
+            }}
+          >
+            <h1
+              style={{
+                margin: 0,
+                fontSize: "32px",
+                color: "#634f43",
+              }}
+            >
+              🩺 爸爸照護
+            </h1>
 
-      {/* =================================================
-          日常紀錄
-      ================================================= */}
-
-      {activeTab === "daily" && (
-        <>
-          {/* 今日照護 */}
-
-          <div className="page-card">
-            <h2>📋 今日照護</h2>
-
-            <p>
-              這裡只代表今天的照護事項是否完成。
+            <p
+              style={{
+                marginTop: "10px",
+                color: "#927d6d",
+                fontSize: "16px",
+              }}
+            >
+              記錄每日照護狀況，方便日後查詢與回診提供醫生參考。
             </p>
-
-            <ul>
-              {careTasks.map((task) => {
-                const completed =
-                  completedTasks.includes(task);
-
-                return (
-                  <li key={task}>
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={completed}
-                        onChange={() =>
-                          toggleTask(task)
-                        }
-                      />
-
-                      <span
-                        style={{
-                          marginLeft: "8px",
-                          textDecoration:
-                            completed
-                              ? "line-through"
-                              : "none",
-                        }}
-                      >
-                        {task}
-                      </span>
-                    </label>
-                  </li>
-                );
-              })}
-            </ul>
           </div>
 
-          {/* 完成度 */}
+          {/* =================================================
+              訊息
+          ================================================= */}
 
-          <div className="page-card">
-            <h2>📊 今日照護完成度</h2>
+          {message && (
+            <div
+              style={{
+                marginBottom: "20px",
+                padding: "12px 16px",
+                borderRadius: "12px",
+                background: "#f5f0eb",
+                color: "#634f43",
+                lineHeight: 1.6,
+              }}
+            >
+              {message}
+            </div>
+          )}
 
-            <p>
-              已完成 {completedCount} /{" "}
-              {totalTasks} 項
-            </p>
+          {/* =================================================
+              分頁
+          ================================================= */}
+
+          <div
+            className="care-tabs"
+            style={{
+              display: "flex",
+              gap: "10px",
+              marginBottom: "24px",
+              borderBottom:
+                "1px solid #e6ddd5",
+              paddingBottom: "14px",
+            }}
+          >
+            <button
+              type="button"
+              style={{
+                border: "none",
+                borderRadius: "10px",
+                padding: "10px 18px",
+                background: "#cbb797",
+                color: "#fff",
+                cursor: "pointer",
+                fontSize: "15px",
+              }}
+            >
+              📝 日常紀錄
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                document
+                  .getElementById(
+                    "care-history"
+                  )
+                  ?.scrollIntoView({
+                    behavior: "smooth",
+                  });
+              }}
+              style={{
+                border: "none",
+                borderRadius: "10px",
+                padding: "10px 18px",
+                background: "#f4f1ed",
+                color: "#634f43",
+                cursor: "pointer",
+                fontSize: "15px",
+              }}
+            >
+              📊 照護歷程
+            </button>
+          </div>
+
+          {/* =================================================
+              今日快速狀態
+          ================================================= */}
+
+          <section
+            style={{
+              background: "#fff",
+              borderRadius: "18px",
+              padding: "24px",
+              marginBottom: "24px",
+              boxShadow:
+                "0 4px 20px rgba(0,0,0,0.06)",
+            }}
+          >
+            <h2
+              style={{
+                marginTop: 0,
+                color: "#634f43",
+              }}
+            >
+              📋 今日照護
+            </h2>
 
             <div
               style={{
-                width: "100%",
-                height: "12px",
-                background: "#E5E7EB",
-                borderRadius: "999px",
-                overflow: "hidden",
+                display: "grid",
+                gridTemplateColumns:
+                  "repeat(auto-fit, minmax(180px, 1fr))",
+                gap: "14px",
               }}
             >
               <div
                 style={{
-                  width: `${todayProgress}%`,
-                  height: "100%",
-                  background: "#C8B59B",
-                  transition:
-                    "width 0.3s ease",
+                  padding: "18px",
+                  background: "#faf7f3",
+                  borderRadius: "14px",
                 }}
-              />
+              >
+                <div
+                  style={{
+                    color: "#927d6d",
+                    fontSize: "14px",
+                  }}
+                >
+                  今日日期
+                </div>
+
+                <strong
+                  style={{
+                    display: "block",
+                    marginTop: "6px",
+                    color: "#634f43",
+                    fontSize: "18px",
+                  }}
+                >
+                  {formatDate(getToday())}
+                </strong>
+              </div>
+
+              <div
+                style={{
+                  padding: "18px",
+                  background: "#faf7f3",
+                  borderRadius: "14px",
+                }}
+              >
+                <div
+                  style={{
+                    color: "#927d6d",
+                    fontSize: "14px",
+                  }}
+                >
+                  今日紀錄
+                </div>
+
+                <strong
+                  style={{
+                    display: "block",
+                    marginTop: "6px",
+                    color: "#634f43",
+                    fontSize: "18px",
+                  }}
+                >
+                  {todayRecords.length} 筆
+                </strong>
+              </div>
+
+              <div
+                style={{
+                  padding: "18px",
+                  background: "#faf7f3",
+                  borderRadius: "14px",
+                }}
+              >
+                <div
+                  style={{
+                    color: "#927d6d",
+                    fontSize: "14px",
+                  }}
+                >
+                  全部歷程
+                </div>
+
+                <strong
+                  style={{
+                    display: "block",
+                    marginTop: "6px",
+                    color: "#634f43",
+                    fontSize: "18px",
+                  }}
+                >
+                  {records.length} 筆
+                </strong>
+              </div>
             </div>
+          </section>
 
-            <p>{todayProgress}%</p>
-          </div>
+          {/* =================================================
+              新增紀錄
+          ================================================= */}
 
-          {/* 新增紀錄 */}
-
-          <div className="page-card">
-            <h2>📝 記錄今天的照護</h2>
+          <section
+            style={{
+              background: "#fff",
+              borderRadius: "18px",
+              padding: "24px",
+              marginBottom: "24px",
+              boxShadow:
+                "0 4px 20px rgba(0,0,0,0.06)",
+            }}
+          >
+            <h2
+              style={{
+                marginTop: 0,
+                color: "#634f43",
+              }}
+            >
+              ✏️ 新增照護紀錄
+            </h2>
 
             <div
               style={{
-                marginBottom: "15px",
+                display: "grid",
+                gridTemplateColumns:
+                  "repeat(auto-fit, minmax(220px, 1fr))",
+                gap: "16px",
+                marginBottom: "18px",
               }}
             >
-              <label>
-                <strong>
-                  紀錄類別：
-                </strong>
+              <div>
+                <label
+                  style={{
+                    display: "block",
+                    marginBottom: "8px",
+                    fontWeight: 600,
+                    color: "#634f43",
+                  }}
+                >
+                  日期
+                </label>
 
-                <select
-                  value={selectedCategory}
+                <input
+                  type="date"
+                  value={recordDate}
                   onChange={(event) =>
-                    setSelectedCategory(
+                    setRecordDate(
                       event.target.value
                     )
                   }
                   style={{
-                    marginLeft: "10px",
-                    padding: "6px",
+                    width: "100%",
+                    padding: "11px",
+                    borderRadius: "10px",
+                    border:
+                      "1px solid #ddd",
+                    boxSizing: "border-box",
+                  }}
+                />
+              </div>
+
+              <div>
+                <label
+                  style={{
+                    display: "block",
+                    marginBottom: "8px",
+                    fontWeight: 600,
+                    color: "#634f43",
                   }}
                 >
-                  {careCategories.map(
-                    (category) => (
+                  紀錄分類
+                </label>
+
+                <select
+                  value={category}
+                  onChange={(event) =>
+                    setCategory(
+                      event.target
+                        .value as CareCategory
+                    )
+                  }
+                  style={{
+                    width: "100%",
+                    padding: "11px",
+                    borderRadius: "10px",
+                    border:
+                      "1px solid #ddd",
+                    boxSizing: "border-box",
+                  }}
+                >
+                  {categories.map(
+                    (item) => (
                       <option
-                        key={category}
-                        value={category}
+                        key={item}
+                        value={item}
                       >
-                        {category}
+                        {categoryEmoji[item]}{" "}
+                        {item}
                       </option>
                     )
                   )}
                 </select>
-              </label>
+              </div>
             </div>
 
-            <div
+            <label
               style={{
-                marginBottom: "15px",
+                display: "block",
+                marginBottom: "8px",
+                fontWeight: 600,
+                color: "#634f43",
               }}
             >
-              <label>
-                <strong>內容：</strong>
-              </label>
+              照護內容
+            </label>
 
-              <textarea
-                value={content}
-                onChange={(event) =>
-                  setContent(
-                    event.target.value
-                  )
-                }
-                placeholder={
-                  "例如：早餐吃半碗粥，午餐吃雞肉；精神狀況普通。"
-                }
-                rows={5}
-                style={{
-                  display: "block",
-                  width: "100%",
-                  marginTop: "8px",
-                  padding: "10px",
-                  boxSizing: "border-box",
-                  resize: "vertical",
-                }}
-              />
-            </div>
+            <textarea
+              value={content}
+              onChange={(event) =>
+                setContent(
+                  event.target.value
+                )
+              }
+              placeholder="例如：今天食慾較差，早餐吃半碗粥，中午吃布丁半個；下午血氧 95%，體溫 37.0°C。"
+              rows={6}
+              style={{
+                width: "100%",
+                padding: "12px",
+                borderRadius: "10px",
+                border: "1px solid #ddd",
+                resize: "vertical",
+                boxSizing: "border-box",
+                fontFamily:
+                  "inherit",
+                fontSize: "15px",
+                lineHeight: 1.7,
+              }}
+            />
 
             <button
               type="button"
-              onClick={addCareLog}
-              disabled={!content.trim()}
+              onClick={handleAddRecord}
+              disabled={saving}
               style={{
-                padding: "8px 18px",
-                cursor: content.trim()
-                  ? "pointer"
-                  : "not-allowed",
+                marginTop: "14px",
+                padding: "11px 22px",
+                border: "none",
+                borderRadius: "10px",
+                background: "#8d765f",
+                color: "#fff",
+                cursor: saving
+                  ? "not-allowed"
+                  : "pointer",
+                fontSize: "15px",
               }}
             >
-              ＋ 儲存照護紀錄
+              {saving
+                ? "儲存中..."
+                : "＋ 儲存照護紀錄"}
             </button>
-          </div>
+          </section>
 
-          {/* 今日紀錄 */}
+          {/* =================================================
+              照護歷程
+          ================================================= */}
 
-          <div className="page-card">
-            <h2>📋 今日紀錄</h2>
-
-            {todayLogs.length === 0 ? (
-              <p>
-                今天還沒有照護紀錄。
-              </p>
-            ) : (
-              <ul>
-                {todayLogs.map((log) => (
-                  <li
-                    key={log.id}
-                    style={{
-                      marginBottom: "18px",
-                    }}
-                  >
-                    <strong>
-                      {log.category}
-                    </strong>
-
-                    <div
-                      style={{
-                        marginTop: "5px",
-                      }}
-                    >
-                      {log.content}
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() =>
-                        deleteCareLog(
-                          log.id
-                        )
-                      }
-                      style={{
-                        marginTop: "6px",
-                        fontSize: "12px",
-                      }}
-                    >
-                      刪除
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </>
-      )}
-
-      {/* =================================================
-          歷程報表
-      ================================================= */}
-
-      {activeTab === "history" && (
-        <div id="care-medical-report">
-
-          <div className="page-card">
-            <h2>🩺 爸爸照護歷程報表</h2>
-
-            <p>
-              這裡專門整理回診期間的照護資料，
-              可直接列印提供醫師參考。
-            </p>
-
-            {/* 日期 */}
-
+          <section
+            id="care-history"
+            style={{
+              background: "#fff",
+              borderRadius: "18px",
+              padding: "24px",
+              marginBottom: "24px",
+              boxShadow:
+                "0 4px 20px rgba(0,0,0,0.06)",
+            }}
+          >
             <div
               style={{
                 display: "flex",
-                gap: "12px",
+                justifyContent:
+                  "space-between",
+                alignItems: "center",
+                gap: "15px",
                 flexWrap: "wrap",
                 marginBottom: "20px",
               }}
             >
-              <label>
-                開始日期：
-                <input
-                  type="date"
-                  value={historyStart}
-                  onChange={(event) =>
-                    setHistoryStart(
-                      event.target.value
-                    )
-                  }
+              <div>
+                <h2
                   style={{
-                    marginLeft: "8px",
-                    padding: "7px",
+                    margin: 0,
+                    color: "#634f43",
                   }}
-                />
-              </label>
+                >
+                  📊 照護歷程
+                </h2>
 
-              <label>
-                結束日期：
-                <input
-                  type="date"
-                  value={historyEnd}
-                  onChange={(event) =>
-                    setHistoryEnd(
-                      event.target.value
-                    )
-                  }
+                <p
                   style={{
-                    marginLeft: "8px",
-                    padding: "7px",
+                    margin:
+                      "8px 0 0",
+                    color: "#927d6d",
                   }}
-                />
-              </label>
+                >
+                  查詢爸爸過去的每日照護紀錄。
+                </p>
+              </div>
 
               <button
                 type="button"
                 onClick={
-                  printMedicalReport
+                  printMedicalRecords
                 }
+                disabled={
+                  filteredRecords.length === 0
+                }
+                className="print-record-button"
                 style={{
-                  padding: "8px 18px",
+                  padding:
+                    "10px 18px",
+                  borderRadius: "10px",
+                  border:
+                    "1px solid #cdbda9",
+                  background: "#fff",
+                  color: "#634f43",
+                  cursor:
+                    filteredRecords.length ===
+                    0
+                      ? "not-allowed"
+                      : "pointer",
                 }}
               >
-                🖨️ 列印回診報表
+                🖨️ 列印回診紀錄
               </button>
             </div>
 
-            {/* 回診摘要 */}
+            {/* =================================================
+                搜尋 / 日期
+            ================================================= */}
 
-            <div className="page-card">
-              <h3>📋 期間摘要</h3>
-
-              <div
+            <div
+              className="care-filter-area"
+              style={{
+                display: "grid",
+                gridTemplateColumns:
+                  "2fr 1fr 1fr",
+                gap: "12px",
+                marginBottom: "14px",
+              }}
+            >
+              <input
+                type="text"
+                value={searchText}
+                onChange={(event) =>
+                  setSearchText(
+                    event.target.value
+                  )
+                }
+                placeholder="🔎 搜尋照護內容、分類或日期"
                 style={{
-                  display: "grid",
-                  gridTemplateColumns:
-                    "repeat(auto-fit,minmax(180px,1fr))",
-                  gap: "12px",
+                  width: "100%",
+                  padding: "11px",
+                  borderRadius: "10px",
+                  border:
+                    "1px solid #ddd",
+                  boxSizing:
+                    "border-box",
+                }}
+              />
+
+              <input
+                type="date"
+                value={startDate}
+                onChange={(event) =>
+                  setStartDate(
+                    event.target.value
+                  )
+                }
+                style={{
+                  width: "100%",
+                  padding: "11px",
+                  borderRadius: "10px",
+                  border:
+                    "1px solid #ddd",
+                  boxSizing:
+                    "border-box",
+                }}
+              />
+
+              <input
+                type="date"
+                value={endDate}
+                onChange={(event) =>
+                  setEndDate(
+                    event.target.value
+                  )
+                }
+                style={{
+                  width: "100%",
+                  padding: "11px",
+                  borderRadius: "10px",
+                  border:
+                    "1px solid #ddd",
+                  boxSizing:
+                    "border-box",
+                }}
+              />
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                gap: "10px",
+                marginBottom: "20px",
+              }}
+            >
+              <button
+                type="button"
+                onClick={clearFilters}
+                style={{
+                  padding: "8px 14px",
+                  borderRadius: "9px",
+                  border:
+                    "1px solid #ddd",
+                  background: "#fff",
+                  color: "#634f43",
+                  cursor: "pointer",
                 }}
               >
-                <div>
-                  <strong>
-                    紀錄天數
-                  </strong>
+                清除篩選
+              </button>
 
-                  <h2>
-                    {historyDays} 天
-                  </h2>
-                </div>
+              <span
+                style={{
+                  alignSelf: "center",
+                  color: "#927d6d",
+                }}
+              >
+                共找到{" "}
+                {filteredRecords.length}{" "}
+                筆紀錄
+              </span>
+            </div>
 
-                <div>
-                  <strong>
-                    照護紀錄
-                  </strong>
+            {/* =================================================
+                歷程資料
+            ================================================= */}
 
-                  <h2>
-                    {filteredHistoryLogs.length}{" "}
-                    筆
-                  </h2>
-                </div>
+            {loading ? (
+              <div
+                style={{
+                  padding: "30px",
+                  textAlign: "center",
+                  color: "#927d6d",
+                }}
+              >
+                載入照護歷程中...
               </div>
-            </div>
-
-            {/* 類別統計 */}
-
-            <div className="page-card">
-              <h3>📊 紀錄類別統計</h3>
-
-              {categoryStats.map(
-                (item) => (
-                  <div
-                    key={item.category}
-                    style={{
-                      display: "flex",
-                      justifyContent:
-                        "space-between",
-                      padding:
-                        "8px 0",
-                      borderBottom:
-                        "1px solid #eee",
-                    }}
-                  >
-                    <span>
-                      {item.category}
-                    </span>
-
-                    <strong>
-                      {item.count} 筆
-                    </strong>
-                  </div>
-                )
-              )}
-            </div>
-
-            {/* 每日紀錄 */}
-
-            <div className="page-card">
-              <h3>
-                📅 每日照護紀錄
-              </h3>
-
-              {historyByDate.length ===
+            ) : groupedRecords.length ===
               0 ? (
-                <p>
-                  這段期間沒有照護紀錄。
-                </p>
-              ) : (
-                historyByDate.map(
-                  ([date, logs]) => (
+              <div
+                style={{
+                  padding: "35px 20px",
+                  textAlign: "center",
+                  color: "#927d6d",
+                  background: "#faf7f3",
+                  borderRadius: "14px",
+                }}
+              >
+                沒有符合條件的照護紀錄。
+              </div>
+            ) : (
+              <div>
+                {groupedRecords.map(
+                  ([date, dateRecords]) => (
                     <div
                       key={date}
                       style={{
                         marginBottom:
-                          "28px",
-                        paddingBottom:
-                          "20px",
-                        borderBottom:
-                          "1px solid #eee",
+                          "24px",
                       }}
                     >
-                      <h3>
-                        📅 {date}
+                      <h3
+                        style={{
+                          margin:
+                            "0 0 12px",
+                          color:
+                            "#634f43",
+                          fontSize:
+                            "19px",
+                        }}
+                      >
+                        📅 {formatDate(date)}
                       </h3>
 
-                      {logs.map((log) => (
-                        <div
-                          key={log.id}
-                          style={{
-                            marginBottom:
-                              "14px",
-                            paddingLeft:
-                              "10px",
-                            borderLeft:
-                              "3px solid #C8B59B",
-                          }}
-                        >
-                          <strong>
-                            {log.category}
-                          </strong>
+                      <div
+                        style={{
+                          display: "flex",
+                          flexDirection:
+                            "column",
+                          gap: "10px",
+                        }}
+                      >
+                        {dateRecords.map(
+                          (record) => (
+                            <div
+                              key={
+                                record.id
+                              }
+                              className="care-record-item"
+                              style={{
+                                padding:
+                                  "16px",
+                                border:
+                                  "1px solid #eee4db",
+                                borderRadius:
+                                  "12px",
+                                background:
+                                  "#fffdfa",
+                              }}
+                            >
+                              <div
+                                style={{
+                                  display:
+                                    "flex",
+                                  justifyContent:
+                                    "space-between",
+                                  alignItems:
+                                    "flex-start",
+                                  gap:
+                                    "15px",
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    minWidth: 0,
+                                    flex: 1,
+                                  }}
+                                >
+                                  <div
+                                    style={{
+                                      fontWeight:
+                                        600,
+                                      color:
+                                        "#634f43",
+                                      marginBottom:
+                                        "8px",
+                                    }}
+                                  >
+                                    {
+                                      categoryEmoji[
+                                        record.category
+                                      ]
+                                    }{" "}
+                                    {
+                                      record.category
+                                    }
+                                  </div>
 
-                          <div
-                            style={{
-                              marginTop:
-                                "5px",
-                              lineHeight:
-                                1.7,
-                            }}
-                          >
-                            {log.content}
-                          </div>
-                        </div>
-                      ))}
+                                  <div
+                                    style={{
+                                      whiteSpace:
+                                        "pre-wrap",
+                                      lineHeight:
+                                        1.7,
+                                      color:
+                                        "#594c43",
+                                    }}
+                                  >
+                                    {
+                                      record.content
+                                    }
+                                  </div>
+                                </div>
+
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleDeleteRecord(
+                                      record.id
+                                    )
+                                  }
+                                  className="care-delete-button"
+                                  style={{
+                                    flexShrink:
+                                      0,
+                                    border:
+                                      "none",
+                                    background:
+                                      "transparent",
+                                    color:
+                                      "#a47d6a",
+                                    cursor:
+                                      "pointer",
+                                    padding:
+                                      "4px 6px",
+                                  }}
+                                >
+                                  刪除
+                                </button>
+                              </div>
+                            </div>
+                          )
+                        )}
+                      </div>
                     </div>
                   )
-                )
-              )}
-            </div>
+                )}
+              </div>
+            )}
+          </section>
+        </div>
+      </div>
 
-            {/* 醫師提醒 */}
+      {/* =====================================================
+          專門給「列印回診紀錄」使用
+          
+          這個區塊平常完全不顯示。
+          按列印後，由 @media print 顯示。
+          
+          所以不會再把整個網頁畫面印出去。
+      ===================================================== */}
 
-            <div className="page-card">
-              <h3>🩺 回診時可提供醫師查看</h3>
+      <div
+        className="care-print-area"
+        aria-hidden="true"
+      >
+        <div
+          style={{
+            fontFamily:
+              '"Noto Sans TC", "Microsoft JhengHei", sans-serif',
+            color: "#222",
+          }}
+        >
+          <h1
+            style={{
+              marginBottom: "8px",
+              fontSize: "24px",
+            }}
+          >
+            爸爸每日照護紀錄
+          </h1>
 
-              <p
+          <div
+            style={{
+              marginBottom: "22px",
+              color: "#555",
+              fontSize: "13px",
+            }}
+          >
+            紀錄期間：
+            {startDate
+              ? formatDate(startDate)
+              : "不限"}
+            {" ～ "}
+            {endDate
+              ? formatDate(endDate)
+              : "不限"}
+          </div>
+
+          {groupedRecords.map(
+            ([date, dateRecords]) => (
+              <div
+                key={date}
                 style={{
-                  lineHeight: 1.8,
-                  color: "#666",
+                  marginBottom: "22px",
+                  pageBreakInside:
+                    "avoid",
                 }}
               >
-                本報表為家屬日常照護紀錄，
-                可作為回診時與醫療團隊討論的參考資料。
-                實際醫療判斷仍以醫師評估為準。
-              </p>
-            </div>
+                <h2
+                  style={{
+                    fontSize: "17px",
+                    margin:
+                      "0 0 8px",
+                    paddingBottom:
+                      "6px",
+                    borderBottom:
+                      "1px solid #999",
+                  }}
+                >
+                  📅 {formatDate(date)}
+                </h2>
 
+                {dateRecords.map(
+                  (record) => (
+                    <div
+                      key={
+                        record.id
+                      }
+                      style={{
+                        marginBottom:
+                          "12px",
+                        paddingBottom:
+                          "10px",
+                        borderBottom:
+                          "1px solid #ddd",
+                        pageBreakInside:
+                          "avoid",
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontWeight:
+                            700,
+                          marginBottom:
+                            "5px",
+                        }}
+                      >
+                        {
+                          categoryEmoji[
+                            record.category
+                          ]
+                        }{" "}
+                        {
+                          record.category
+                        }
+                      </div>
+
+                      <div
+                        style={{
+                          whiteSpace:
+                            "pre-wrap",
+                          lineHeight:
+                            1.7,
+                          fontSize:
+                            "14px",
+                        }}
+                      >
+                        {
+                          record.content
+                        }
+                      </div>
+                    </div>
+                  )
+                )}
+              </div>
+            )
+          )}
+
+          <div
+            style={{
+              marginTop: "25px",
+              paddingTop: "10px",
+              borderTop:
+                "1px solid #999",
+              fontSize: "12px",
+              color: "#666",
+            }}
+          >
+            共 {filteredRecords.length} 筆照護紀錄
           </div>
         </div>
-      )}
-    </section>
+      </div>
+
+      {/* =====================================================
+          列印 CSS
+      ===================================================== */}
+
+      <style>
+        {`
+          .care-print-area {
+            display: none;
+          }
+
+          @media (max-width: 700px) {
+            .care-filter-area {
+              grid-template-columns: 1fr !important;
+            }
+          }
+
+          @media print {
+            @page {
+              size: A4;
+              margin: 15mm;
+            }
+
+            html,
+            body {
+              background: #fff !important;
+              margin: 0 !important;
+              padding: 0 !important;
+            }
+
+            body * {
+              visibility: hidden !important;
+            }
+
+            .care-print-area,
+            .care-print-area * {
+              visibility: visible !important;
+            }
+
+            .care-print-area {
+              display: block !important;
+              position: absolute !important;
+              left: 0 !important;
+              top: 0 !important;
+              width: 100% !important;
+              background: #fff !important;
+              color: #222 !important;
+            }
+
+            .care-screen {
+              display: none !important;
+            }
+          }
+        `}
+      </style>
+    </>
   );
 }
 
