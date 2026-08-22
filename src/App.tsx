@@ -24,6 +24,13 @@ type Page =
   | "schedule"
   | "settings";
 
+// =====================================================
+// Atlas OS 正式網站網址
+// =====================================================
+
+const PRODUCTION_URL =
+  "https://atlas-os-sooty-six.vercel.app/";
+
 function App() {
   // =====================================================
   // 頁面
@@ -79,6 +86,30 @@ function App() {
     useState(false);
 
   // =====================================================
+  // 判斷目前是不是 Supabase 密碼重設連結
+  //
+  // Supabase 的 recovery link 會帶：
+  //
+  // #access_token=...
+  // #refresh_token=...
+  // #type=recovery
+  //
+  // =====================================================
+
+  const isPasswordRecoveryUrl = () => {
+    const hash =
+      window.location.hash || "";
+
+    const search =
+      window.location.search || "";
+
+    return (
+      hash.includes("type=recovery") ||
+      search.includes("type=recovery")
+    );
+  };
+
+  // =====================================================
   // 初始化 Session
   //
   // 注意：
@@ -90,11 +121,35 @@ function App() {
     let mounted = true;
 
     const initSession = async () => {
+      // -------------------------------------------------
+      // 如果使用者是從「忘記密碼」Email 點進來，
+      // 直接進入設定新密碼畫面。
+      // -------------------------------------------------
+
+      if (isPasswordRecoveryUrl()) {
+        if (!mounted) {
+          return;
+        }
+
+        setPasswordRecoveryMode(true);
+        setForgotPasswordMode(false);
+        setLoggedIn(false);
+        setLoading(false);
+
+        return;
+      }
+
+      // -------------------------------------------------
+      // 一般 Session
+      // -------------------------------------------------
+
       const {
         data: { session },
       } = await supabase.auth.getSession();
 
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
 
       setLoggedIn(!!session);
       setLoading(false);
@@ -102,32 +157,44 @@ function App() {
 
     initSession();
 
+    // ===================================================
+    // 監聽 Supabase Auth 狀態
+    // ===================================================
+
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(
       (event, session) => {
-        if (!mounted) return;
+        if (!mounted) {
+          return;
+        }
 
-        // =================================================
-        // Supabase 密碼重設流程
-        // 使用者點擊 Email 裡的重設連結後，
-        // Supabase 會觸發 PASSWORD_RECOVERY。
-        // =================================================
+        console.log(
+          "Supabase Auth event:",
+          event
+        );
 
-        if (event === "PASSWORD_RECOVERY") {
+        // -------------------------------------------------
+        // 密碼重設
+        // -------------------------------------------------
+
+        if (
+          event === "PASSWORD_RECOVERY"
+        ) {
           setPasswordRecoveryMode(true);
           setForgotPasswordMode(false);
           setLoggedIn(false);
           setLoading(false);
+
           return;
         }
 
-        // =================================================
+        // -------------------------------------------------
         // 一般登入 / 登出
         //
-        // 不檢查 MFA。
-        // 不檢查 AAL。
-        // =================================================
+        // 不檢查 MFA
+        // 不檢查 AAL
+        // -------------------------------------------------
 
         setLoggedIn(!!session);
         setLoading(false);
@@ -150,7 +217,9 @@ function App() {
         event as CustomEvent<Page>;
 
       if (customEvent.detail) {
-        setCurrentPage(customEvent.detail);
+        setCurrentPage(
+          customEvent.detail
+        );
       }
     };
 
@@ -181,10 +250,13 @@ function App() {
 
     const {
       error,
-    } = await supabase.auth.signInWithPassword({
-      email: email.trim(),
-      password,
-    });
+    } =
+      await supabase.auth.signInWithPassword(
+        {
+          email: email.trim(),
+          password,
+        }
+      );
 
     if (error) {
       console.error(
@@ -197,12 +269,13 @@ function App() {
       );
 
       setLoading(false);
+
       return;
     }
 
-    // =================================================
+    // -------------------------------------------------
     // 登入成功
-    // =================================================
+    // -------------------------------------------------
 
     setLoggedIn(true);
     setCurrentPage("dashboard");
@@ -215,6 +288,12 @@ function App() {
 
   // =====================================================
   // 忘記密碼：寄送重設信
+  //
+  // 重要：
+  // 不使用 window.location.origin。
+  //
+  // 直接指定 Atlas OS 正式網址，
+  // 避免重設信導向 localhost。
   // =====================================================
 
   const handleForgotPassword = async (
@@ -229,6 +308,7 @@ function App() {
       setResetMessage(
         "請先輸入你的 Email。"
       );
+
       return;
     }
 
@@ -243,7 +323,7 @@ function App() {
           targetEmail,
           {
             redirectTo:
-              window.location.origin,
+              PRODUCTION_URL,
           }
         );
 
@@ -288,28 +368,46 @@ function App() {
 
     setPasswordResetMessage("");
 
+    // -------------------------------------------------
+    // 密碼長度
+    // -------------------------------------------------
+
     if (newPassword.length < 6) {
       setPasswordResetMessage(
         "新密碼至少需要 6 個字元。"
       );
+
       return;
     }
 
-    if (newPassword !== confirmPassword) {
+    // -------------------------------------------------
+    // 確認密碼
+    // -------------------------------------------------
+
+    if (
+      newPassword !==
+      confirmPassword
+    ) {
       setPasswordResetMessage(
         "兩次輸入的新密碼不一致。"
       );
+
       return;
     }
 
     setPasswordResetLoading(true);
 
     try {
+      // -------------------------------------------------
+      // Supabase 更新密碼
+      // -------------------------------------------------
+
       const {
         error,
-      } = await supabase.auth.updateUser({
-        password: newPassword,
-      });
+      } =
+        await supabase.auth.updateUser({
+          password: newPassword,
+        });
 
       if (error) {
         console.error(
@@ -324,6 +422,10 @@ function App() {
         return;
       }
 
+      // -------------------------------------------------
+      // 成功
+      // -------------------------------------------------
+
       setPasswordResetMessage(
         "✅ 密碼已成功更新！"
       );
@@ -331,12 +433,23 @@ function App() {
       setNewPassword("");
       setConfirmPassword("");
 
-      // 稍微停一下，讓使用者看得到成功訊息
+      // -------------------------------------------------
+      // 稍微停留一下讓使用者看到成功訊息，
+      // 然後回到 Atlas OS。
+      // -------------------------------------------------
+
       setTimeout(() => {
         setPasswordRecoveryMode(false);
         setLoggedIn(true);
         setCurrentPage("dashboard");
-      }, 800);
+
+        // 清除 recovery URL 裡面的 token/hash
+        window.history.replaceState(
+          {},
+          document.title,
+          PRODUCTION_URL
+        );
+      }, 1000);
     } catch (error) {
       console.error(
         "Update password exception:",
@@ -406,7 +519,9 @@ function App() {
             🦊
           </div>
 
-          <h1>Atlas OS</h1>
+          <h1>
+            Atlas OS
+          </h1>
 
           <p>
             個人管理作業系統
@@ -485,7 +600,9 @@ function App() {
           </p>
 
           <form
-            onSubmit={handleUpdatePassword}
+            onSubmit={
+              handleUpdatePassword
+            }
           >
             <label
               style={{
@@ -558,9 +675,12 @@ function App() {
               className="atlas-message"
               style={{
                 marginTop: "18px",
+                lineHeight: 1.7,
               }}
             >
-              {passwordResetMessage}
+              {
+                passwordResetMessage
+              }
             </div>
           )}
         </div>
@@ -630,7 +750,9 @@ function App() {
           </p>
 
           <form
-            onSubmit={handleForgotPassword}
+            onSubmit={
+              handleForgotPassword
+            }
           >
             <label
               style={{
@@ -686,7 +808,10 @@ function App() {
           <button
             type="button"
             onClick={() => {
-              setForgotPasswordMode(false);
+              setForgotPasswordMode(
+                false
+              );
+
               setResetMessage("");
             }}
             style={{
@@ -695,7 +820,8 @@ function App() {
               marginTop: "20px",
               padding: "10px",
               border: "none",
-              background: "transparent",
+              background:
+                "transparent",
               color: "#927d6d",
               cursor: "pointer",
             }}
@@ -839,7 +965,10 @@ function App() {
           <button
             type="button"
             onClick={() => {
-              setForgotPasswordMode(true);
+              setForgotPasswordMode(
+                true
+              );
+
               setResetEmail(email);
               setMessage("");
             }}
@@ -849,7 +978,8 @@ function App() {
               marginTop: "18px",
               padding: "10px",
               border: "none",
-              background: "transparent",
+              background:
+                "transparent",
               color: "#927d6d",
               cursor: "pointer",
               fontSize: "14px",
@@ -927,7 +1057,8 @@ function App() {
             position: "relative",
           }}
         >
-          {currentPage === "dashboard" && (
+          {currentPage ===
+            "dashboard" && (
             <Dashboard />
           )}
 
@@ -943,11 +1074,13 @@ function App() {
             <StockCenter />
           )}
 
-          {currentPage === "schedule" && (
+          {currentPage ===
+            "schedule" && (
             <ScheduleCenter />
           )}
 
-          {currentPage === "settings" && (
+          {currentPage ===
+            "settings" && (
             <SettingsCenter />
           )}
         </div>
